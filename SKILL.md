@@ -41,7 +41,7 @@ allowed-tools:
 flowchart LR
     A[科研 figure 需求<br/>Fig1 / TOC /<br/>graphical abstract<br/>可选 PNG 底图输入] --> B[0. Bootstrap<br/>CC0 元件库 ~17000<br/>download_cc0_seed.py --all]
     B --> C[1. LLM 写 SVG 骨架<br/>MiniMax 首选<br/>量大 / 便宜 / 清晰<br/>备选 Claude / GLM-5.1 / GPT-5]
-    C --> D[2. 搜库填元件<br/>library_tools.py search<br/>CC0 优先<br/>Recraft 4 Vector Pro<br/>补半立体或缺失元件]
+    C --> D[2. 搜库填元件<br/>library_tools.py search<br/>CC0 优先<br/>Recraft 4 Vector / 4 Vector Pro<br/>前者便宜<br/>元件丑陋则用后者<br/>补半立体或缺失元件]
     D --> E[3. 模板装配<br/>assemble_figure.py<br/>+ 自动 CC-BY 归属注入<br/>+ 字体规范化]
     E --> F[4. Inkscape / PowerPoint 微调<br/>修文字碰撞<br/>5-10 分钟<br/>只配一个 MCP 就用所配那个]
     F --> G[5. 导出<br/>SVG 编辑<br/>PDF 投稿<br/>PPTX 汇报]
