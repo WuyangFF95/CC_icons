@@ -49,8 +49,13 @@ XLINK_HREF = "{http://www.w3.org/1999/xlink}href"
 
 
 def load_manifest(manifest_path: Path) -> dict:
-    """Load the YAML manifest as a plain dict."""
-    return yaml.safe_load(manifest_path.read_text())
+    """Load the YAML manifest as a plain dict.
+
+    yaml.safe_load returns None for an empty / comment-only file; coerce to
+    an empty dict so downstream `manifest.get(...)` calls don't blow up with
+    AttributeError.
+    """
+    return yaml.safe_load(manifest_path.read_text()) or {}
 
 
 # Same shape that library_tools.load_unified_index() emits for legacy YAML rows.
@@ -122,28 +127,48 @@ def resolve_element_path(value: str, library_root: Path) -> Path:
 
 
 def lookup_attribution(value: str, library_root: Path) -> dict | None:
-    """If `value` is a CC-BY element ID, return its record.
+    """If `value` references a CC-BY element, return its record.
 
-    Walks both the unified `library/index.json` and the legacy per-category
-    YAMLs (legacy entries are CC0-equivalent by convention, so they never
-    return non-None here, but the symmetric lookup keeps the resolution model
-    consistent).
+    Resolves both shapes:
+      * unified-index ID  ->  match `r["id"] == value`
+      * relative path     ->  match `<library_root>/library/<r["file"]>`
+                              against the resolved manifest path; this covers
+                              the case where a user references a Reactome /
+                              Servier asset by path instead of ID.
+
+    Walks the unified `library/index.json` and the legacy per-category YAMLs.
+    Legacy YAML rows aren't currently flagged attribution_required, but the
+    symmetric scan keeps the resolution model consistent if that changes.
     """
-    if "/" in value or value.lower().endswith((".svg", ".png", ".emf")):
-        return None
     json_index = library_root / "library" / "index.json"
+
+    # ID branch.
+    if not ("/" in value or value.lower().endswith((".svg", ".png", ".emf"))):
+        if json_index.exists():
+            try:
+                for r in json.loads(json_index.read_text()):
+                    if r.get("id") == value and r.get("attribution_required"):
+                        return r
+            except Exception:
+                pass
+        legacy = _scan_legacy_yaml(value, library_root)
+        if legacy and legacy.get("attribution_required"):
+            return legacy
+        return None
+
+    # Path branch: resolve and reverse-lookup against the unified index by
+    # comparing against the on-disk path each record points at.
+    target = (library_root / value).resolve()
     if json_index.exists():
         try:
             for r in json.loads(json_index.read_text()):
-                if r.get("id") == value and r.get("attribution_required"):
+                if not r.get("attribution_required"):
+                    continue
+                rec_path = (library_root / "library" / r["file"]).resolve()
+                if rec_path == target:
                     return r
         except Exception:
             pass
-    # Legacy YAML rows are not flagged attribution_required; if that ever
-    # changes, _scan_legacy_yaml's record carries the field.
-    legacy = _scan_legacy_yaml(value, library_root)
-    if legacy and legacy.get("attribution_required"):
-        return legacy
     return None
 
 
@@ -229,6 +254,11 @@ def fill_placeholders(template_path: Path, manifest: dict, output_path: Path) ->
                     wrapper.append(copy.deepcopy(child))
                 parent.remove(placeholder)
         else:
+            # Use a file:// URI rather than a bare filesystem path so the
+            # href stays valid across spaces in path components, Windows
+            # drive letters, and `xmllint`/browser SVG renderers that treat
+            # naked paths as relative.
+            href_uri = element_full_path.resolve().as_uri()
             for placeholder in placeholders:
                 parent = placeholder.getparent()
                 if parent is None:
@@ -241,7 +271,7 @@ def fill_placeholders(template_path: Path, manifest: dict, output_path: Path) ->
                         "y": placeholder.get("y", "0"),
                         "width": placeholder.get("width", "100"),
                         "height": placeholder.get("height", "100"),
-                        XLINK_HREF: str(element_full_path),
+                        XLINK_HREF: href_uri,
                     },
                 )
                 parent.remove(placeholder)

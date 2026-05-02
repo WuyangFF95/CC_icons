@@ -393,26 +393,44 @@ def cmd_check(args: argparse.Namespace) -> int:
         print("Hint: create one with project's element requirements.")
         return 1
 
-    manifest = yaml.safe_load(manifest_path.read_text())
+    manifest = yaml.safe_load(manifest_path.read_text()) or {}
     print(f"\n=== Project: {args.project} ===\n")
     have: list[tuple[dict, str, str]] = []
     missing: list[dict] = []
 
+    # Walk the unified index once so v0.1.1 CC0 records show up as "have"
+    # alongside legacy YAML rows. The legacy walk stays as the second tier
+    # to preserve the v0.1.0 contract of matching on `subject`+`style`.
+    unified_records = load_unified_index()
+
     for req in manifest.get("elements_needed", []):
         found = False
-        for category in CATEGORIES:
-            idx_path = LIBRARY_ROOT / category / "_index.yaml"
-            if not idx_path.exists():
-                continue
-            idx = yaml.safe_load(idx_path.read_text()) or {"elements": []}
-            for entry in idx.get("elements", []):
-                if (req["subject"].lower() in entry.get("subject", "").lower()
-                        and entry.get("style") == req.get("style")):
-                    have.append((req, category, entry["file"]))
-                    found = True
-                    break
-            if found:
+        # Tier 1: unified index (CC0 bulk + already-merged legacy rows).
+        for r in unified_records:
+            name = (r.get("name") or "").lower()
+            tags = [(t or "").lower() for t in r.get("tags", [])]
+            if (req["subject"].lower() in name
+                    and (req.get("style") or "") in tags):
+                have.append((req, r.get("category", ""), r.get("file", "")))
+                found = True
                 break
+
+        # Tier 2: per-category legacy YAML (preserves v0.1.0 contract).
+        if not found:
+            for category in CATEGORIES:
+                idx_path = LIBRARY_ROOT / category / "_index.yaml"
+                if not idx_path.exists():
+                    continue
+                idx = yaml.safe_load(idx_path.read_text()) or {"elements": []}
+                for entry in idx.get("elements", []):
+                    if (req["subject"].lower() in entry.get("subject", "").lower()
+                            and entry.get("style") == req.get("style")):
+                        have.append((req, category, entry["file"]))
+                        found = True
+                        break
+                if found:
+                    break
+
         if not found:
             missing.append(req)
 
@@ -596,61 +614,63 @@ def cmd_export(args: argparse.Namespace) -> int:
     prs.slide_height = Inches(7.5)
     blank_layout = prs.slide_layouts[6]
 
-    # Use a tempfile-managed dir for cross-platform safety.
-    tmp_dir = Path(tempfile.mkdtemp(prefix="library_export_"))
-
-    print(f"Exporting {len(selected)} elements to PPTX (tmp: {tmp_dir})...")
-    for r in selected:
-        svg_path = resolve_svg_path(r)
-        if not svg_path.exists():
-            continue
-        ext = svg_path.suffix.lower()
-        # python-pptx accepts .png/.jpg directly; .svg must be rasterized;
-        # other formats (.ai/.eps/.emf/.wmf) need an external converter.
-        if ext == ".svg":
-            picture_path = tmp_dir / f"{r['id']}.png"
-            try:
-                cairosvg.svg2png(
-                    url=str(svg_path),
-                    write_to=str(picture_path),
-                    output_width=1200,
-                )
-            except Exception as exc:
-                print(f"  [skip] {r['id']}: SVG render failed ({type(exc).__name__}: {exc})",
+    # TemporaryDirectory ensures the rasterized PNGs get cleaned up regardless
+    # of which branch we exit through (success / cairosvg failure / ctrl-C).
+    with tempfile.TemporaryDirectory(prefix="library_export_") as tmp_str:
+        tmp_dir = Path(tmp_str)
+        print(f"Exporting {len(selected)} elements to PPTX (tmp: {tmp_dir})...")
+        for r in selected:
+            svg_path = resolve_svg_path(r)
+            if not svg_path.exists():
+                continue
+            ext = svg_path.suffix.lower()
+            # python-pptx accepts .png/.jpg directly; .svg must be rasterized;
+            # other formats (.ai/.eps/.emf/.wmf) need an external converter.
+            if ext == ".svg":
+                picture_path = tmp_dir / f"{r['id']}.png"
+                try:
+                    cairosvg.svg2png(
+                        url=str(svg_path),
+                        write_to=str(picture_path),
+                        output_width=1200,
+                    )
+                except Exception as exc:
+                    print(f"  [skip] {r['id']}: SVG render failed "
+                          f"({type(exc).__name__}: {exc})",
+                          file=sys.stderr)
+                    continue
+            elif ext in (".png", ".jpg", ".jpeg"):
+                picture_path = svg_path
+            else:
+                print(f"  [skip] {r['id']}: unsupported format {ext} "
+                      "(needs libreoffice or inkscape conversion)",
                       file=sys.stderr)
                 continue
-        elif ext in (".png", ".jpg", ".jpeg"):
-            picture_path = svg_path
-        else:
-            print(f"  [skip] {r['id']}: unsupported format {ext} "
-                  "(needs libreoffice or inkscape conversion)",
-                  file=sys.stderr)
-            continue
 
-        slide = prs.slides.add_slide(blank_layout)
-        slide.shapes.add_picture(str(picture_path), Inches(2.5), Inches(1.0),
-                                 height=Inches(4.5))
+            slide = prs.slides.add_slide(blank_layout)
+            slide.shapes.add_picture(str(picture_path), Inches(2.5), Inches(1.0),
+                                     height=Inches(4.5))
 
-        title_box = slide.shapes.add_textbox(Inches(0.5), Inches(0.3),
-                                             Inches(12), Inches(0.6))
-        title_box.text_frame.text = r["name"]
-        title_box.text_frame.paragraphs[0].font.size = Pt(24)
-        title_box.text_frame.paragraphs[0].font.bold = True
+            title_box = slide.shapes.add_textbox(Inches(0.5), Inches(0.3),
+                                                 Inches(12), Inches(0.6))
+            title_box.text_frame.text = r["name"]
+            title_box.text_frame.paragraphs[0].font.size = Pt(24)
+            title_box.text_frame.paragraphs[0].font.bold = True
 
-        footer = slide.shapes.add_textbox(Inches(0.5), Inches(6.6),
-                                          Inches(12), Inches(0.6))
-        footer.text_frame.text = (
-            f"{r['id']}  |  source: {r['source']}  |  license: {r['license']}"
-        )
-        footer.text_frame.paragraphs[0].font.size = Pt(11)
+            footer = slide.shapes.add_textbox(Inches(0.5), Inches(6.6),
+                                              Inches(12), Inches(0.6))
+            footer.text_frame.text = (
+                f"{r['id']}  |  source: {r['source']}  |  license: {r['license']}"
+            )
+            footer.text_frame.paragraphs[0].font.size = Pt(11)
 
-        if r.get("attribution_required"):
-            attr_p = footer.text_frame.add_paragraph()
-            attr_p.text = f"ATTRIBUTION: {r.get('attribution', '')}"
-            attr_p.font.size = Pt(10)
+            if r.get("attribution_required"):
+                attr_p = footer.text_frame.add_paragraph()
+                attr_p.text = f"ATTRIBUTION: {r.get('attribution', '')}"
+                attr_p.font.size = Pt(10)
 
-    out_path = Path(args.output).expanduser()
-    prs.save(str(out_path))
+        out_path = Path(args.output).expanduser()
+        prs.save(str(out_path))
     print(f"Saved: {out_path}")
     return 0
 
@@ -661,7 +681,11 @@ def cmd_attribution(args: argparse.Namespace) -> int:
 
     if args.ids:
         wanted = set(args.ids.split(","))
-        selected = [r for r in records if r["id"] in wanted]
+        # Even when the caller pipes in IDs explicitly, only emit attribution
+        # for records that need it; otherwise feeding `search --ids-only` (CC0
+        # included) into here would bloat the caption with public-domain rows.
+        selected = [r for r in records
+                    if r["id"] in wanted and r.get("attribution_required")]
     else:
         selected = [r for r in records if r.get("attribution_required")]
 
