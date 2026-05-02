@@ -53,44 +53,97 @@ def load_manifest(manifest_path: Path) -> dict:
     return yaml.safe_load(manifest_path.read_text())
 
 
+# Same shape that library_tools.load_unified_index() emits for legacy YAML rows.
+_LEGACY_CATEGORIES = (
+    "cells", "molecules", "organelles", "tissues",
+    "organs", "equipment", "pathways", "arrows",
+)
+
+
+def _scan_legacy_yaml(value: str, library_root: Path) -> dict | None:
+    """Walk per-category _index.yaml files for a `manual-...` style ID.
+
+    library_tools.search emits IDs like `manual-cells-treg-flat-v1` for rows
+    registered through the legacy YAML path; without this fallback, those IDs
+    can't be resolved here, even though the same ID renders in `search`.
+    """
+    if not value.startswith("manual-"):
+        return None
+    for category in _LEGACY_CATEGORIES:
+        yaml_index = library_root / category / "_index.yaml"
+        if not yaml_index.exists():
+            continue
+        try:
+            data = yaml.safe_load(yaml_index.read_text()) or {"elements": []}
+        except Exception:
+            continue
+        for entry in data.get("elements", []):
+            file_stem = (entry.get("file") or "").replace(".svg", "")
+            fid = f"manual-{category}-{file_stem}"
+            if fid == value:
+                return {
+                    "id": fid,
+                    "_category": category,
+                    "_file": entry.get("file", ""),
+                    "license": entry.get("license", "research-use-only"),
+                    "source_name": entry.get("provider", "manual"),
+                    "attribution_required": False,
+                }
+    return None
+
+
 def resolve_element_path(value: str, library_root: Path) -> Path:
     """Map a manifest value to an actual on-disk file.
 
     Disambiguation:
       * "/" in value or extension in {.svg, .png, .emf}  ->  treated as a
         path relative to `library_root`.
-      * else  ->  treated as a unified-index ID, looked up in
-        library_root/library/index.json.
+      * starts with "manual-"                             ->  legacy YAML lookup.
+      * else                                              ->  unified-index ID
+        lookup in library_root/library/index.json.
     """
     if "/" in value or value.lower().endswith((".svg", ".png", ".emf")):
         return library_root / value
 
+    legacy = _scan_legacy_yaml(value, library_root)
+    if legacy is not None:
+        return library_root / legacy["_category"] / legacy["_file"]
+
     json_index = library_root / "library" / "index.json"
-    if not json_index.exists():
-        return library_root / value
-    try:
-        records: list[dict] = json.loads(json_index.read_text())
-        for r in records:
-            if r.get("id") == value:
-                return library_root / "library" / r["file"]
-    except Exception:
-        pass
+    if json_index.exists():
+        try:
+            records: list[dict] = json.loads(json_index.read_text())
+            for r in records:
+                if r.get("id") == value:
+                    return library_root / "library" / r["file"]
+        except Exception:
+            pass
     return library_root / value
 
 
 def lookup_attribution(value: str, library_root: Path) -> dict | None:
-    """If `value` is a unified-index ID for a CC-BY element, return its record."""
+    """If `value` is a CC-BY element ID, return its record.
+
+    Walks both the unified `library/index.json` and the legacy per-category
+    YAMLs (legacy entries are CC0-equivalent by convention, so they never
+    return non-None here, but the symmetric lookup keeps the resolution model
+    consistent).
+    """
     if "/" in value or value.lower().endswith((".svg", ".png", ".emf")):
         return None
     json_index = library_root / "library" / "index.json"
-    if not json_index.exists():
-        return None
-    try:
-        for r in json.loads(json_index.read_text()):
-            if r.get("id") == value and r.get("attribution_required"):
-                return r
-    except Exception:
-        return None
+    if json_index.exists():
+        try:
+            for r in json.loads(json_index.read_text()):
+                if r.get("id") == value and r.get("attribution_required"):
+                    return r
+        except Exception:
+            pass
+    # Legacy YAML rows are not flagged attribution_required; if that ever
+    # changes, _scan_legacy_yaml's record carries the field.
+    legacy = _scan_legacy_yaml(value, library_root)
+    if legacy and legacy.get("attribution_required"):
+        return legacy
     return None
 
 
@@ -249,15 +302,32 @@ def fill_placeholders(template_path: Path, manifest: dict, output_path: Path) ->
 
 
 def normalize_fonts(svg_path: Path, font_family: str) -> None:
-    """Force every text-bearing element to use one font-family."""
+    """Force every text-bearing element to use one font-family.
+
+    Three passes:
+      1. set font-family on the root <svg> so inheritance picks it up;
+      2. rewrite any explicit `font-family=...` attribute or `style=...;font-family:...`;
+      3. for `<text>` / `<tspan>` that declare neither, set an explicit
+         `font-family` so merged CC0 subtrees (whose own <svg> root we
+         dropped) don't fall back to the UA default.
+    """
     tree = etree.parse(str(svg_path))
     root = tree.getroot()
 
     count = 0
+    # (1) root inheritance.
+    if root.get("font-family") != font_family:
+        root.set("font-family", font_family)
+        count += 1
+
+    text_tags = {f"{SVG_TAG}text", f"{SVG_TAG}tspan"}
     for elem in root.iter():
-        if elem.get("font-family"):
+        # (2) rewrite explicit attribute.
+        if elem.get("font-family") and elem.get("font-family") != font_family:
             elem.set("font-family", font_family)
             count += 1
+
+        # (2) rewrite within style="...".
         style = elem.get("style", "")
         if "font-family" in style:
             parts: list[str] = []
@@ -269,8 +339,34 @@ def normalize_fonts(svg_path: Path, font_family: str) -> None:
             elem.set("style", ";".join(parts))
             count += 1
 
+        # (3) explicitly set on text-bearing elements that have nothing.
+        if (elem.tag in text_tags
+                and not elem.get("font-family")
+                and "font-family" not in (elem.get("style") or "")):
+            elem.set("font-family", font_family)
+            count += 1
+
     tree.write(str(svg_path), xml_declaration=True, encoding="utf-8")
     print(f"[font] normalized {count} elements -> {font_family}")
+
+
+def _run_inkscape(cmd: list[str], purpose: str) -> bool:
+    """Run an Inkscape CLI invocation; return False (don't crash) on failure."""
+    try:
+        subprocess.run(cmd, check=True, capture_output=True)
+        return True
+    except FileNotFoundError:
+        print(f"Warning: Inkscape CLI not found on PATH; skipping {purpose}.",
+              file=sys.stderr)
+        print("  Install Inkscape >= 1.2 from https://inkscape.org/", file=sys.stderr)
+        return False
+    except subprocess.CalledProcessError as exc:
+        stderr_tail = (exc.stderr or b"").decode("utf-8", errors="replace")[-400:]
+        print(f"Warning: Inkscape failed during {purpose}: {exc.returncode}",
+              file=sys.stderr)
+        if stderr_tail.strip():
+            print(f"  stderr: {stderr_tail.strip()}", file=sys.stderr)
+        return False
 
 
 def export_pdf(svg_path: Path, pdf_path: Path, outline_text: bool = False) -> None:
@@ -282,8 +378,8 @@ def export_pdf(svg_path: Path, pdf_path: Path, outline_text: bool = False) -> No
         f"--export-text-to-path={'true' if outline_text else 'false'}",
         f"--export-filename={pdf_path}",
     ]
-    subprocess.run(cmd, check=True, capture_output=True)
-    print(f"[export] PDF: {pdf_path}")
+    if _run_inkscape(cmd, f"PDF export -> {pdf_path}"):
+        print(f"[export] PDF: {pdf_path}")
 
 
 def export_pptx(svg_path: Path, pptx_path: Path) -> None:
@@ -298,27 +394,33 @@ def export_pptx(svg_path: Path, pptx_path: Path) -> None:
         return
 
     png_temp = svg_path.with_suffix(".tmp.png")
-    subprocess.run([
-        "inkscape", str(svg_path),
-        "--export-type=png",
-        "--export-dpi=300",
-        f"--export-filename={png_temp}",
-    ], check=True, capture_output=True)
-
-    prs = Presentation()
-    prs.slide_width = Inches(13.333)  # 16:9
-    prs.slide_height = Inches(7.5)
-    blank_layout = prs.slide_layouts[6]
-    slide = prs.slides.add_slide(blank_layout)
-    slide.shapes.add_picture(
-        str(png_temp),
-        left=Inches(0.5), top=Inches(0.5),
-        width=Inches(12.333), height=Inches(6.5),
+    rendered = _run_inkscape(
+        [
+            "inkscape", str(svg_path),
+            "--export-type=png",
+            "--export-dpi=300",
+            f"--export-filename={png_temp}",
+        ],
+        "PNG raster for PPTX",
     )
+    if not rendered:
+        return
 
-    prs.save(str(pptx_path))
-    png_temp.unlink(missing_ok=True)
-    print(f"[export] PPTX: {pptx_path}")
+    try:
+        prs = Presentation()
+        prs.slide_width = Inches(13.333)  # 16:9
+        prs.slide_height = Inches(7.5)
+        blank_layout = prs.slide_layouts[6]
+        slide = prs.slides.add_slide(blank_layout)
+        slide.shapes.add_picture(
+            str(png_temp),
+            left=Inches(0.5), top=Inches(0.5),
+            width=Inches(12.333), height=Inches(6.5),
+        )
+        prs.save(str(pptx_path))
+        print(f"[export] PPTX: {pptx_path}")
+    finally:
+        png_temp.unlink(missing_ok=True)
 
 
 # ---------------------------------------------------------------------------

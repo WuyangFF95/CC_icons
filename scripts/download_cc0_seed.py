@@ -653,7 +653,12 @@ def extract_servier_pptx(target_root: Path, pptx_path: Path) -> list[dict]:
 
 
 def merge_index(target_root: Path, new_records: list[dict]) -> tuple[int, int]:
-    """Merge new records into library/index.json, dedupe by record id."""
+    """Merge new records into library/index.json, dedupe by record id.
+
+    Dedupes both against the on-disk index and within `new_records` itself —
+    a single batch can produce duplicates (e.g. a source's API paginates the
+    same item twice) and the downstream resolver assumes IDs are unique.
+    """
     index_path = target_root / "library" / "index.json"
     if index_path.exists():
         try:
@@ -666,8 +671,10 @@ def merge_index(target_root: Path, new_records: list[dict]) -> tuple[int, int]:
     existing_ids = {r["id"] for r in existing}
     added = 0
     for r in new_records:
-        if r["id"] not in existing_ids:
+        rid = r["id"]
+        if rid not in existing_ids:
             existing.append(r)
+            existing_ids.add(rid)  # also dedupe within this batch
             added += 1
     index_path.parent.mkdir(parents=True, exist_ok=True)
     index_path.write_text(json.dumps(existing, indent=2, ensure_ascii=False))
@@ -753,7 +760,16 @@ def main() -> int:
     # a single, actionable message instead of partway through a source.
     _require_runtime_deps()
 
-    sources_to_run = list(SOURCES_META.keys()) if args.all else [args.source]
+    if args.all:
+        # --all is documented as "every non-manual source"; quietly drop the
+        # ones that need a user-supplied --pptx / --zip so the helpful
+        # "requires --xxx" stub doesn't spam the overnight log.
+        sources_to_run = [
+            s for s, meta in SOURCES_META.items()
+            if not meta.get("manual_download")
+        ]
+    else:
+        sources_to_run = [args.source]
 
     for s in sources_to_run:
         try:

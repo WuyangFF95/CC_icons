@@ -63,7 +63,10 @@ except (ImportError, OSError):
 
 
 SVG_NS = {"svg": "http://www.w3.org/2000/svg"}
+# Mutated in main() when --library-root is supplied.
 LIBRARY_ROOT = Path.home() / "sci-illustration-library"
+# Top-level legacy categories. The unified index also uses sub-categories
+# like "cells/immune" and "equipment/lab"; CLI filters accept either form.
 CATEGORIES = [
     "cells", "molecules", "organelles", "tissues",
     "organs", "equipment", "pathways", "arrows",
@@ -295,7 +298,9 @@ def cmd_search(args: argparse.Namespace) -> int:
     """Full-text search the unified index."""
     records = load_unified_index()
     if not records:
-        print("Library is empty. Run download_cc0_seed.py to seed.")
+        # Empty CSV (just a newline) when piping; human prompt otherwise.
+        if not args.ids_only:
+            print("Library is empty. Run download_cc0_seed.py to seed.")
         return 0
 
     query = (args.query or "").lower().strip()
@@ -310,8 +315,12 @@ def cmd_search(args: argparse.Namespace) -> int:
 
         if query and query not in haystack:
             continue
-        if args.category and r.get("category") != args.category:
-            continue
+        if args.category:
+            cat = r.get("category", "")
+            # `--category cells` matches "cells" plus any "cells/<sub>".
+            # `--category cells/immune` matches that record exactly.
+            if not (cat == args.category or cat.startswith(args.category + "/")):
+                continue
         if args.source and args.source not in r.get("source", ""):
             continue
         if args.license and args.license.upper() not in r.get("license", "").upper():
@@ -330,7 +339,13 @@ def cmd_search(args: argparse.Namespace) -> int:
         matches = matches[: args.max]
 
     if not matches:
-        print("No matches.")
+        if not args.ids_only:
+            print("No matches.")
+        return 0
+
+    if args.ids_only:
+        # Pure CSV on stdout, nothing else — pipe-safe (e.g. `--ids "$(... --ids-only)"`).
+        print(",".join(r["id"] for r in matches))
         return 0
 
     print(f"\nFound {len(matches)} element(s):\n")
@@ -342,9 +357,6 @@ def cmd_search(args: argparse.Namespace) -> int:
         print(f"    source:   {r['source']}  ({r['license']})")
         print(f"    file:     {r['file']}")
         print()
-
-    if args.ids_only:
-        print(",".join(r["id"] for r in matches))
 
     return 0
 
@@ -510,17 +522,33 @@ def cmd_preview(args: argparse.Namespace) -> int:
             draw.text((x + 4, y + cell // 2), "missing", fill="red", font=font)
             continue
 
+        ext = svg_path.suffix.lower()
         try:
-            png_bytes = cairosvg.svg2png(
-                url=str(svg_path),
-                output_width=cell,
-                output_height=cell,
-            )
-            img = Image.open(BytesIO(png_bytes)).convert("RGB")
-            canvas.paste(img, (x, y))
-        except Exception:
+            if ext == ".svg":
+                png_bytes = cairosvg.svg2png(
+                    url=str(svg_path),
+                    output_width=cell,
+                    output_height=cell,
+                )
+                img = Image.open(BytesIO(png_bytes)).convert("RGB")
+            elif ext in (".png", ".jpg", ".jpeg"):
+                img = Image.open(svg_path).convert("RGB")
+                img.thumbnail((cell, cell))
+            else:
+                # AI / EPS / EMF / WMF — these need an external converter
+                # (libreoffice, inkscape) and aren't worth a hard dep here.
+                draw.rectangle([x, y, x + cell, y + cell], outline="#888")
+                draw.text((x + 4, y + 4), f"unsupported {ext}", fill="#888", font=font)
+                continue
+            # Center-paste raster preview within the cell.
+            paste_x = x + (cell - img.width) // 2
+            paste_y = y + (cell - img.height) // 2
+            canvas.paste(img, (paste_x, paste_y))
+        except Exception as exc:
             draw.rectangle([x, y, x + cell, y + cell], outline="orange")
-            draw.text((x + 4, y + 4), "render fail", fill="orange", font=font)
+            draw.text((x + 4, y + 4),
+                      f"render fail: {type(exc).__name__}",
+                      fill="orange", font=font)
 
         name = r.get("name", "")[:30]
         draw.text((x, y + cell + 2), name, fill="black", font=font)
@@ -576,19 +604,31 @@ def cmd_export(args: argparse.Namespace) -> int:
         svg_path = resolve_svg_path(r)
         if not svg_path.exists():
             continue
-        png_tmp = tmp_dir / f"{r['id']}.png"
-        try:
-            cairosvg.svg2png(
-                url=str(svg_path),
-                write_to=str(png_tmp),
-                output_width=1200,
-            )
-        except Exception as exc:
-            print(f"  [skip] {r['id']}: render failed ({exc})")
+        ext = svg_path.suffix.lower()
+        # python-pptx accepts .png/.jpg directly; .svg must be rasterized;
+        # other formats (.ai/.eps/.emf/.wmf) need an external converter.
+        if ext == ".svg":
+            picture_path = tmp_dir / f"{r['id']}.png"
+            try:
+                cairosvg.svg2png(
+                    url=str(svg_path),
+                    write_to=str(picture_path),
+                    output_width=1200,
+                )
+            except Exception as exc:
+                print(f"  [skip] {r['id']}: SVG render failed ({type(exc).__name__}: {exc})",
+                      file=sys.stderr)
+                continue
+        elif ext in (".png", ".jpg", ".jpeg"):
+            picture_path = svg_path
+        else:
+            print(f"  [skip] {r['id']}: unsupported format {ext} "
+                  "(needs libreoffice or inkscape conversion)",
+                  file=sys.stderr)
             continue
 
         slide = prs.slides.add_slide(blank_layout)
-        slide.shapes.add_picture(str(png_tmp), Inches(2.5), Inches(1.0),
+        slide.shapes.add_picture(str(picture_path), Inches(2.5), Inches(1.0),
                                  height=Inches(4.5))
 
         title_box = slide.shapes.add_textbox(Inches(0.5), Inches(0.3),
@@ -673,6 +713,11 @@ def build_parser() -> argparse.ArgumentParser:
         description="Local scientific element library management",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
+    parser.add_argument("--library-root",
+                        default=str(Path.home() / "sci-illustration-library"),
+                        help=("override library root (default: "
+                              "~/sci-illustration-library; matches the "
+                              "--target flag of download_cc0_seed.py)"))
     sub = parser.add_subparsers(dest="command", required=True)
 
     p_qc = sub.add_parser("qc", help="QC a single SVG element")
@@ -698,7 +743,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_search = sub.add_parser("search", help="search the unified library index")
     p_search.add_argument("query", nargs="?", default=None,
                           help="full-text query (matches name/category/tags/id)")
-    p_search.add_argument("--category", choices=CATEGORIES, help="restrict to category")
+    # Accept any category string — the unified index uses subcategories like
+    # "cells/immune" and "equipment/lab" alongside the top-level CATEGORIES.
+    p_search.add_argument("--category",
+                          help=("restrict to category (top-level e.g. cells, "
+                                "or subcategory e.g. cells/immune)"))
     p_search.add_argument("--source", help="restrict to source (bioicons/phylopic/...)")
     p_search.add_argument("--license", help="license keyword (CC0 / CC-BY / Public)")
     p_search.add_argument("--max", type=int, default=50, help="cap result count")
@@ -741,6 +790,11 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> int:
     parser = build_parser()
     args = parser.parse_args()
+
+    # Apply --library-root before any command runs. Mutating the module global
+    # keeps the loader / resolver functions free of an extra plumbing arg.
+    global LIBRARY_ROOT
+    LIBRARY_ROOT = Path(args.library_root).expanduser().resolve()
     LIBRARY_ROOT.mkdir(parents=True, exist_ok=True)
 
     handlers = {
