@@ -35,6 +35,35 @@ allowed-tools:
 
 # Scientific Illustration Asset Pipeline v0.1
 
+## 一图看懂流水线 / Pipeline at a Glance
+
+```mermaid
+flowchart LR
+    A[科研 figure 需求<br/>Fig1 / TOC /<br/>graphical abstract] --> B[0. Bootstrap<br/>CC0 元件库 ~17000<br/>download_cc0_seed.py --all]
+    B --> C[1. LLM 写 SVG 骨架<br/>MiniMax 首选<br/>量大 / 便宜 / 清晰<br/>备选 Claude / GLM-5.1 / GPT-5]
+    C --> D[2. 搜库填元件<br/>library_tools.py search<br/>CC0 优先<br/>Recraft 补半立体]
+    D --> E[3. 模板装配<br/>assemble_figure.py<br/>+ 自动 CC-BY 归属注入<br/>+ 字体规范化]
+    E --> F[4. Inkscape 微调<br/>修文字碰撞<br/>5-10 分钟]
+    F --> G[5. 导出<br/>SVG 编辑<br/>PDF 投稿<br/>PPTX 汇报]
+
+    style A fill:#FFFFFF,stroke:#1B3A6E,stroke-width:2px,color:#1B3A6E
+    style B fill:#F2F8FD,stroke:#2E7CD6,color:#1B5BA0
+    style C fill:#F2FAF4,stroke:#4FA85F,stroke-width:3px,color:#2E7B3D
+    style D fill:#F8F8F4,stroke:#888,color:#333
+    style E fill:#F7F4FA,stroke:#8B5CB7,color:#6B3F9A
+    style F fill:#FDF6F4,stroke:#A32D2D,color:#A32D2D
+    style G fill:#FAFAF7,stroke:#666,stroke-width:2px,color:#333
+```
+
+读图速记：
+
+- **Bootstrap 一次到位**（步骤 0，约一晚）→ 后续每个项目从步骤 1 开始
+- **整图骨架 ≠ 元件**：骨架用 LLM 写代码（步骤 1，**MiniMax 首选**），元件来自 CC0 库（步骤 2）
+- **机器主导步骤 0–3、5；人主导步骤 4**（视觉层级和文字内容由人决定）
+- **每张投稿图都带可追溯的 attribution 清单**（步骤 3 自动注入，步骤 5 同步导出）
+
+---
+
 ## v0.1.1 重大变更摘要（必读）
 
 本版基于一次实战测试做了路径修正。**v0.1.0 把 Recraft 当做整图主力**——这条路在面对"科研图必须文字真节点"时被证伪。修正项：
