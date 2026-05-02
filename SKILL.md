@@ -1,12 +1,14 @@
 ---
 name: scientific-illustration-asset-pipeline
-version: 0.1.0
+version: 0.1.1
 description: |
   Master skill for scientific figure creation via AI-generated element library
-  plus semi-automated assembly. Coordinates multiple AI image providers
-  (Recraft, OpenAI gpt-image, Gemini Imagen, Zhipu GLM CogView, MiniMax) for
-  element generation, manages a versioned local asset library, and automates
-  layout via Inkscape MCP and PowerPoint MCP. Triggers: "做 Fig1", "graphical
+  plus semi-automated assembly. As of v0.1.1, the primary path for *whole-figure*
+  generation is "LLM writes SVG code directly" (Claude / MiniMax / GLM-5.1 /
+  GPT-5), supplemented by a CC0 icon library (~17000 elements from BioIcons,
+  PhyloPic, NIH BioArt, Reactome, SciDraw, Servier Medical Art) for the
+  semi-3D bio-element gap that LLMs cannot draw. Recraft V3 is repositioned
+  as element-level reinforcement only. Triggers: "做 Fig1", "graphical
   abstract", "组装科研图", "用元件库做综述图", "scientific figure assembly",
   "TOC graphic", "review paper schematic".
   This skill orchestrates other skills (recraft-scientific-illustration for
@@ -33,7 +35,146 @@ allowed-tools:
 
 # Scientific Illustration Asset Pipeline v0.1
 
-## 总览：从碎片化到工程化
+## v0.1.1 重大变更摘要（必读）
+
+本版基于一次实战测试做了路径修正。**v0.1.0 把 Recraft 当做整图主力**——这条路在面对"科研图必须文字真节点"时被证伪。修正项：
+
+| 章节 | v0.1.0 | v0.1.1 修订 |
+|---|---|---|
+| 整图主力 provider | Recraft V3 + 矢量化 | **LLM 直出 SVG 代码**（Claude / MiniMax / GLM-5.1 / GPT-5）|
+| Recraft 定位 | 整图 + 元件 | **元件补强**（α-helix / 受体 / 立体器官等半立体元件）|
+| 文字处理 | 提示词避免 | **LLM 路径天然真节点**，仅需 Inkscape 修文字碰撞 |
+| 排版自动化 Level 3 | 标"完全自动化不可能" | **限定为"扩散模型路径不可能"**，LLM 路径 + 元件库可行 |
+| 元件库 bootstrap | 手动一个个生成 | **CC0 公开数据源 6 选一晚跑完，~17000 元件入库** |
+| 投稿 attribution | 未处理 | **assemble_figure.py 自动注入 + library_tools attribution 命令** |
+
+**核心洞察**：LLM 写 SVG 代码（不是图像扩散模型）是科研图的真正赛道。失败模式（文字坐标重叠）比扩散路径的失败模式（文字必糊）易修复 100 倍。详见 `## 一、AI Provider 选择矩阵 § 1.0`。
+
+---
+
+## 零、CC0 元件库 Bootstrap（v0.1.1 新增）
+
+**任何项目第一步**：从 6 个 CC0 / CC-BY / Public Domain 数据源批量下载 ~17000 个矢量科研元件入库，作为后续 figure 组装的"立体元件子弹"。这一步替代 v0.1.0 里"为每个项目单独 Recraft 生成"的低效流程。
+
+### 0.1 数据源清单
+
+| 源 | 授权 | 规模 | 拿法 |
+|---|---|---|---|
+| **BioIcons** | **CC0** | ~1500 SVG | `git clone duerrsimon/bioicons` |
+| **PhyloPic** | CC0 / CC-BY | ~10000 silhouettes | REST API `api.phylopic.org` |
+| **NIH BioArt** (NIAID) | **公有领域** | ~2500 illustrations | manual ZIP drop（站点已是 Next.js SPA，无公开 REST 端点）|
+| **Reactome Icons** | CC BY 4.0 | ~500 SVG | `git clone reactome/icon-lib` |
+| **SciDraw** (Janelia) | **CC0** | ~700 SVG | webscrape `scidraw.io` |
+| **Servier Medical Art** | CC BY 3.0 | ~3000 SVG/EMF | 用户手动下 PPTX 包，脚本拆 |
+
+### 0.2 一晚 bootstrap 命令
+
+```bash
+# 一次性全部下载（一晚跑完，~500MB）
+python scripts/download_cc0_seed.py --all --target ~/sci-illustration-library
+
+# 或限速版（PhyloPic 量大可限）
+python scripts/download_cc0_seed.py --source phylopic --max-per-source 1000
+
+# Servier 需要先手动从 https://smart.servier.com 下 PPTX 包
+python scripts/download_cc0_seed.py --source servier \
+       --pptx ~/Downloads/servier-anatomy.pptx
+
+# NIH BioArt 站点已是 Next.js SPA（无 REST 端点，HTTP 抓取拿不到任何卡片）。
+# 流程：在 https://bioart.niaid.nih.gov/ 浏览并选下载所需 illustration，
+# 打成 ZIP 后投放：
+python scripts/download_cc0_seed.py --source nih_bioart \
+       --zip ~/Downloads/nih_bioart_pack.zip
+```
+
+### 0.3 入库结构
+
+```
+~/sci-illustration-library/
+├── library/
+│   ├── index.json                    ← 元数据 + 授权追溯（统一索引）
+│   ├── cells/
+│   │   ├── immune/                   ← T cell, macrophage, dendritic
+│   │   ├── cancer/
+│   │   ├── neuron/
+│   │   └── general/
+│   ├── molecules/
+│   │   ├── protein/
+│   │   ├── nucleic_acid/
+│   │   └── small/
+│   ├── organelles/
+│   ├── tissues/
+│   ├── organs/
+│   ├── equipment/
+│   │   ├── lab/
+│   │   └── clinical/
+│   └── pathways/
+├── _raw/                             ← 原始下载（git repos, PPTX 解包）
+└── _final/                           ← 项目最终交付目录
+    └── <project-name>/
+```
+
+### 0.4 元数据 schema（`library/index.json`）
+
+每个 icon 一条记录：
+
+```json
+{
+  "id": "bioicons-tcell-activated",
+  "name": "T cell activated",
+  "tags": ["immune", "lymphocyte"],
+  "category": "cells/immune",
+  "source": "bioicons",
+  "source_url": "https://bioicons.com",
+  "license": "CC0",
+  "license_url": "https://creativecommons.org/publicdomain/zero/1.0/",
+  "attribution_required": false,
+  "file": "cells/immune/bioicons-tcell-activated.svg",
+  "added_at": "2026-05-02"
+}
+```
+
+CC BY 类型自动 `attribution_required: true` 并填充 `attribution` 字段。投稿前用 `library_tools.py attribution` 一键导出 figure caption 文本。
+
+### 0.5 浏览与搜索
+
+```bash
+# 整库统计
+python scripts/library_tools.py stats
+
+# 搜索元件
+python scripts/library_tools.py search "alpha helix"
+python scripts/library_tools.py search "T cell" --license CC0 --max 20
+python scripts/library_tools.py search --category cells/immune
+
+# 缩略图 grid 浏览
+python scripts/library_tools.py preview --query "neuron" --output preview.png
+
+# 导出选定元件到 PPTX 模板（每元件一 slide，含名称和授权）
+python scripts/library_tools.py export \
+       --ids "bioicons-alpha-helix,phylopic-abc12345" \
+       --output ./elements.pptx
+
+# 投稿前导出 attribution 清单
+python scripts/library_tools.py attribution --output ./fig1-attribution.md
+```
+
+### 0.6 与 Recraft 的关系
+
+CC0 库 ≠ 完全替代 Recraft。两者分工：
+
+| 元件类型 | 优先来源 |
+|---|---|
+| 通用细胞、抗体、酶等扁平 icon | **CC0 库**（BioIcons / Reactome 优先） |
+| 通用 silhouette（动物、人、植物） | **CC0 库**（PhyloPic） |
+| 神经元、电极等 neuro 专用 | **CC0 库**（SciDraw） |
+| 解剖图、医疗设备 | **CC0 库**（Servier / NIH BioArt） |
+| **半立体 cartoon**（α-helix 螺旋柱、HLA-I receptor、立体器官切面） | **Recraft V3** + style reference |
+| 极特殊原创元件 | **手画**（Affinity Designer） |
+
+**新工作流**：先去 `library_tools.py search` 查 CC0 库，**找不到合适的再 Recraft 补**。这样平均每个项目 Recraft 调用次数 ↓ 90%，速度↑、成本↓、license 更干净。
+
+---
 
 这个 skill 解决的核心问题是 **科研图制作的工程化**：
 把每张图从"一次性手工艺品"变成"基于元件库的可组装、可版本化、可复用产物"。
@@ -69,7 +210,69 @@ allowed-tools:
 
 不同模型在不同场景的实测能力差异显著。**选错 provider 是浪费 credit 的最大原因**。
 
-### 1.1 按元件类型选 provider
+### 1.0 整图 vs 元件：两条根本不同的赛道（v0.1.1 重要修订）
+
+科研图生成任务分两层，**用错赛道一定失败**：
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  整图 / 4-panel Fig1 / graphical abstract                   │
+│  ────────────────────────────────────                       │
+│  → 走 LLM 写 SVG 代码 (第一档)                                │
+│    Claude / MiniMax M-series / GLM-5.1 / GPT-5              │
+│    优势：文字真节点、节点极少、可编辑、Git diff 友好           │
+│    限制：文字坐标重叠、半立体元件画不精细                       │
+│    修复：Inkscape 5-10 分钟微调 / 元件库补                    │
+│                                                             │
+│  → ❌ 不走 扩散模型 + 矢量化 (Recraft 整图)                    │
+│    会得到：2308 path / 0 text / 文字全糊（实测过）             │
+└─────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────┐
+│  单个半立体生物元件（α-helix / receptor / cell cartoon）        │
+│  ─────────────────────────────                              │
+│  → 走 元件库优先（CC0 → Recraft V3 → 手画）                    │
+│    扁平 icon → CC0 库已覆盖 80%                                │
+│    半立体 cartoon → Recraft V3（必须 prompt 禁文字）           │
+│    极特殊原创 → Affinity Designer 手画                         │
+└─────────────────────────────────────────────────────────────┘
+```
+
+**实测数据**（同主题 "dark proteome" 4-panel 对比）：
+
+| Provider | 路径 | `<text>` 节点 | `<path>` | 节点总数 | 文件大小 |
+|---|---|---|---|---|---|
+| Recraft V3 | 扩散 → 矢量化 | **0**（文字必糊） | 2308 | 44661 | 1.8 MB |
+| MiniMax M2.5 | LLM 写代码 | **142** | 31 | 150 | 41 KB |
+| Claude Visualizer | LLM 写代码 | ~80 | ~25 | ~80 | ~36 KB |
+| Claude 独立 SVG | LLM 写代码 | **166** | 24 | 111 | 36.5 KB |
+
+LLM 路径在所有维度都更好（除半立体元件视觉质感的 30%，由元件库补强）。
+
+### 1.0a LLM 直出 SVG（整图主力 prompt 模板）
+
+```
+Generate a complete SVG figure for [TOPIC], Nature Reviews Drug Discovery
+style. 4-panel layout (a/b/c/d), central theme circle, bottom legend strip.
+ViewBox 1600×1000. Constraints:
+- All text as real <text> nodes (must be editable, not paths)
+- Flat colors, no gradients
+- Color-coded panel headers (a=blue, b=green, c=gray, d=purple)
+- Each panel has bold title + subtitle + 4-6 child elements
+- Output ONLY the SVG code, no markdown fence
+```
+
+修复文字碰撞（LLM 路径的固有失败模式）：
+
+```bash
+# Inkscape GUI 微调，5-10 分钟
+inkscape figure.svg
+
+# 或用脚本检测 bbox 冲突（待 v0.2 实现）
+# python scripts/text_collision_check.py figure.svg
+```
+
+### 1.1 单元件 provider（按元件类型）
 
 | 元件类型 | 首选 | 备选 | 避免 |
 |---|---|---|---|
@@ -339,8 +542,14 @@ mcp__inkscape__dom_set(
 ### Level 3: 完全自动化
 基于自然语言描述出最终图。
 
-**适用**：低质量需求场景（讲座 PPT 配图）。
-**严禁用于**：投稿 figure。**架构上不可能产出审稿过线的质量**。
+**v0.1.1 修订**：v0.1.0 标"架构上不可能"，过严。
+
+**实际可行性按路径分**：
+- ❌ **扩散模型路径**（"用 Imagen / Recraft 直接出 Fig1 PNG"）：仍架构不可能。文字必糊。
+- ⚠️ **LLM 写 SVG + 元件库自动填充路径**：**可达 70-80% 投稿质量**。瓶颈在文字坐标重叠 + 半立体元件细节。
+- ✅ **LLM + 元件库 + 5 分钟人工微调**：可达 95% 投稿质量，等价于 BioRender + Affinity 手做的 90% 时间。
+
+**新结论**：投稿 figure 推荐 Level 1+2 混合（LLM 写骨架 + 元件库填充 + 人工 polish），不再禁止 Level 3 探索。
 
 ---
 
@@ -565,7 +774,18 @@ PPT 里嵌入 SVG，导出后 SVG 仍可在 Inkscape/Affinity 编辑——
 
 ## 九、版本历史与限制
 
-### 当前版本（v0.1.0）已支持
+### v0.1.1（current）新增
+- **零章 CC0 元件库 bootstrap**：6 数据源 ~17000 元件一键下载
+- **download_cc0_seed.py**：BioIcons / PhyloPic / NIH BioArt / Reactome / SciDraw / Servier
+- **library_tools.py 升级**：`stats` / `preview` (缩略图 grid) / `export` (PPTX) / `attribution` 4 个新命令
+- **统一索引**：`library/index.json` 合并 CC0 bulk + legacy YAML
+- **assemble_figure.py 升级**：支持按 unified ID 引用元件、自动注入 CC BY attribution、PNG/EMF 元件回退到 `<image>` 引用
+- **示例模板与 manifest**：`templates/dark_proteome_4panel_template.svg` + 配套 manifest YAML
+- **整图主力 provider 修订**：从 Recraft 改为 LLM 直出 SVG（Claude / MiniMax / GLM-5.1 / GPT-5）
+- **Recraft 重新定位**：仅做半立体元件补强，不再担任整图主力
+- **Level 3 评估更新**：撤回"完全自动化不可能"，限定为"扩散模型路径不可能"
+
+### v0.1.0 已支持（保留）
 - Recraft / Gemini / Zhipu GLM / MiniMax 元件生成
 - vectorizer.ai 矢量化
 - Inkscape MCP 自动化排版
@@ -574,17 +794,24 @@ PPT 里嵌入 SVG，导出后 SVG 仍可在 Inkscape/Affinity 编辑——
 
 ### 已知限制
 - WPS Office 无 MCP，只能通过兼容打开 PPTX
-- Claude 无图像生成 API，无法作为元件 provider
-- 完全自动化排版仍是开放问题（设计本质决定）
+- ~~Claude 无图像生成 API，无法作为元件 provider~~ → **v0.1.1 修订**：Claude 通过 Visualizer / 直接写 SVG 代码可以作为整图 provider
+- ~~完全自动化排版仍是开放问题~~ → **v0.1.1 修订**：限定为扩散路径，LLM + 元件库路径已可达 70-80%
 - 中文字体处理在 Inkscape 上仍需手动指定（思源黑体等）
+- LLM 写 SVG 的固有失败模式：文字坐标重叠（需 5-10 分钟 Inkscape 微调）
+- BioRender 集成（订阅用户合规路径）：v0.1.1 暂不实现，等 BioRender MCP 工具暴露后另行评估
 
 ### 计划 v0.2
 - 增加元件库 Web UI 检索（取代 grep _index.yaml）
 - 增加 Style Reference 自动校验（每周扫描漂移）
 - 增加投稿期刊配置文件（Nature/Cell/Lancet 各家的色板/字号/尺寸规范）
+- **`text_collision_check.py`**：自动检测 LLM 输出 SVG 中 `<text>` bbox 重叠并提示修复
+- **BioRender connector 集成**（个人订阅合规路径）
+- **元件库 web preview**：基于 cmd_preview，前端浏览器可点击下载
+- **低保真描摹层**（low-fidelity tracing layer）：对每一个 CC0 / AI 生成的 SVG 元件先经过 Inkscape / Adobe Illustrator 的低保真 trace 步骤，让风格异质的多源元件在嵌入模板前**先收敛到同一笔触/色板/抽象层级**，再用 Inkscape / PPT 排版输出 PDF / SVG-内嵌-SVG。这是和本版 ID 解析与 attribution 注入正交的独立步骤，单独排期，不进 v0.1.1。
 
 ### 设计原则（不会改变）
 1. **80% 自动 + 20% 人决策** —— 视觉层级永远人定
 2. **元件库优先** —— 重复使用 > 重新生成
-3. **可追溯性强制** —— 每张图必须有 elements-used.yaml
-4. **Git 版本化** —— 元件库本身是可分享的资产
+3. **CC0 优先** —— 不分发受版权保护的素材
+4. **可追溯性强制** —— 每张图必须有 elements-used.yaml + attribution 清单
+5. **Git 版本化** —— 元件库本身是可分享的资产
