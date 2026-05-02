@@ -1,0 +1,228 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Template: dark_proteome_4panel_template.svg
+  Purpose : Skeleton for a Nature-Reviews-Drug-Discovery-style 4-panel figure.
+
+  Conventions used by scripts/assemble_figure.py:
+    * Element slots are <rect data-placeholder="ID"> or <g data-placeholder="ID">.
+      Each slot carries x/y/width/height so PNG/EMF fallbacks can reuse the
+      geometry when a non-SVG asset is dropped in.
+    * Text labels are <text id="ID">. The assembler replaces the inner text
+      with manifest.labels[ID].
+    * <title> at the top is for accessibility only (not rewritten); the visible
+      figure title is the <text id="fig-title"> element below it.
+    * viewBox is 1600x1000.
+-->
+<svg xmlns="http://www.w3.org/2000/svg"
+     viewBox="0 0 1600 1000"
+     width="1600" height="1000"
+     font-family="Arial, Helvetica, sans-serif">
+  <title>Figure 1 — 4-panel scientific template</title>
+  <desc>4-panel scientific figure template with placeholder slots and text labels</desc>
+
+  <defs>
+    <marker id="arr" viewBox="0 0 10 10" refX="8" refY="5"
+            markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0,0 L10,5 L0,10 z" fill="#444"/>
+    </marker>
+  </defs>
+
+  <rect width="1600" height="1000" fill="#FFFFFF"/>
+
+  <!-- Visible figure title — replaced by manifest.labels.fig-title -->
+  <text id="fig-title" x="800" y="14" font-size="14" font-weight="700"
+        fill="#1B3A6E" text-anchor="middle">Figure title placeholder</text>
+
+  <!-- ===== PANEL A (top-left) — color theme: blue ===== -->
+  <rect x="20" y="20" width="760" height="440" rx="14"
+        fill="#F2F8FD" stroke="#2E7CD6" stroke-width="0.8"/>
+  <rect x="40" y="38" width="36" height="28" rx="6" fill="#2E7CD6"/>
+  <text x="58" y="58" font-size="18" font-weight="700"
+        fill="#FFFFFF" text-anchor="middle">a</text>
+  <text id="panel-a-title" x="88" y="58" font-size="20"
+        font-weight="700" fill="#1B5BA0">Panel A title</text>
+  <text id="panel-a-subtitle" x="40" y="88" font-size="13"
+        fill="#1B5BA0">Panel A subtitle text</text>
+
+  <text id="panel-a-element-1-label" x="80" y="118" font-size="13"
+        font-weight="600" fill="#333">Element 1 label</text>
+  <rect data-placeholder="panel-a-element-1"
+        x="40" y="130" width="120" height="100" fill="none" stroke="#2E7CD6"
+        stroke-dasharray="3,2" opacity="0.3"/>
+
+  <text id="panel-a-element-2-label" x="240" y="118" font-size="13"
+        font-weight="600" fill="#333">Element 2 label</text>
+  <rect data-placeholder="panel-a-element-2"
+        x="200" y="130" width="160" height="100" fill="none" stroke="#2E7CD6"
+        stroke-dasharray="3,2" opacity="0.3"/>
+
+  <text id="panel-a-element-3-label" x="430" y="118" font-size="13"
+        font-weight="600" fill="#333">Element 3 label (chart area)</text>
+  <rect data-placeholder="panel-a-chart"
+        x="430" y="130" width="240" height="120" fill="none" stroke="#2E7CD6"
+        stroke-dasharray="3,2" opacity="0.3"/>
+
+  <text id="panel-a-row2-label" x="40" y="290" font-size="13"
+        font-weight="600" fill="#333">Row 2 label</text>
+  <rect data-placeholder="panel-a-row2"
+        x="40" y="300" width="320" height="80" fill="none" stroke="#2E7CD6"
+        stroke-dasharray="3,2" opacity="0.3"/>
+
+  <text id="panel-a-feature-label" x="430" y="290" font-size="13"
+        font-weight="600" fill="#333">Features label</text>
+  <g data-placeholder="panel-a-feature-1" transform="translate(465,330)"></g>
+  <text id="panel-a-feature-1-name" x="465" y="380" font-size="10"
+        fill="#444" text-anchor="middle">Feature 1</text>
+  <g data-placeholder="panel-a-feature-2" transform="translate(560,330)"></g>
+  <text id="panel-a-feature-2-name" x="560" y="380" font-size="10"
+        fill="#444" text-anchor="middle">Feature 2</text>
+  <g data-placeholder="panel-a-feature-3" transform="translate(660,330)"></g>
+  <text id="panel-a-feature-3-name" x="660" y="380" font-size="10"
+        fill="#444" text-anchor="middle">Feature 3</text>
+
+  <!-- ===== PANEL B (top-right) — color theme: green ===== -->
+  <rect x="820" y="20" width="760" height="440" rx="14"
+        fill="#F2FAF4" stroke="#4FA85F" stroke-width="0.8"/>
+  <rect x="840" y="38" width="36" height="28" rx="6" fill="#4FA85F"/>
+  <text x="858" y="58" font-size="18" font-weight="700"
+        fill="#FFFFFF" text-anchor="middle">b</text>
+  <text id="panel-b-title" x="888" y="58" font-size="20"
+        font-weight="700" fill="#2E7B3D">Panel B title</text>
+  <text id="panel-b-subtitle" x="840" y="88" font-size="13"
+        fill="#2E7B3D">Panel B subtitle text</text>
+
+  <text id="panel-b-element-1-label" x="840" y="118" font-size="13"
+        font-weight="600" fill="#333">Element 1 label</text>
+  <rect data-placeholder="panel-b-element-1"
+        x="840" y="130" width="320" height="160" fill="none" stroke="#4FA85F"
+        stroke-dasharray="3,2" opacity="0.3"/>
+
+  <text id="panel-b-element-2-label" x="1200" y="118" font-size="13"
+        font-weight="600" fill="#333">Element 2 label</text>
+  <rect data-placeholder="panel-b-element-2"
+        x="1200" y="130" width="340" height="160" fill="none" stroke="#4FA85F"
+        stroke-dasharray="3,2" opacity="0.3"/>
+
+  <text id="panel-b-icons-label" x="840" y="320" font-size="13"
+        font-weight="600" fill="#333">Detection challenges</text>
+  <g data-placeholder="panel-b-icon-1" transform="translate(960,380)"></g>
+  <text id="panel-b-icon-1-name" x="960" y="425" font-size="12"
+        fill="#444" text-anchor="middle">Icon 1</text>
+  <g data-placeholder="panel-b-icon-2" transform="translate(1180,380)"></g>
+  <text id="panel-b-icon-2-name" x="1180" y="425" font-size="12"
+        fill="#444" text-anchor="middle">Icon 2</text>
+  <g data-placeholder="panel-b-icon-3" transform="translate(1400,380)"></g>
+  <text id="panel-b-icon-3-name" x="1400" y="425" font-size="12"
+        fill="#444" text-anchor="middle">Icon 3</text>
+
+  <!-- ===== PANEL C (bottom-left) — color theme: gray ===== -->
+  <rect x="20" y="480" width="760" height="440" rx="14"
+        fill="#F8F8F4" stroke="#888" stroke-width="0.6"/>
+  <rect x="40" y="498" width="36" height="28" rx="6" fill="#5F5E5A"/>
+  <text x="58" y="518" font-size="18" font-weight="700"
+        fill="#FFFFFF" text-anchor="middle">c</text>
+  <text id="panel-c-title" x="88" y="518" font-size="20"
+        font-weight="700" fill="#333">Panel C title</text>
+  <text id="panel-c-subtitle" x="40" y="548" font-size="13"
+        fill="#555">Panel C subtitle text</text>
+
+  <!-- Card grid: 4 cards per row, 2 rows -->
+  <rect data-placeholder="panel-c-card-1"
+        x="40" y="565" width="170" height="90" fill="none" stroke="#888"
+        stroke-dasharray="3,2" opacity="0.3"/>
+  <rect data-placeholder="panel-c-card-2"
+        x="220" y="565" width="170" height="90" fill="none" stroke="#888"
+        stroke-dasharray="3,2" opacity="0.3"/>
+  <rect data-placeholder="panel-c-card-3"
+        x="400" y="565" width="170" height="90" fill="none" stroke="#888"
+        stroke-dasharray="3,2" opacity="0.3"/>
+  <rect data-placeholder="panel-c-card-4"
+        x="580" y="565" width="170" height="90" fill="none" stroke="#888"
+        stroke-dasharray="3,2" opacity="0.3"/>
+  <rect data-placeholder="panel-c-card-5"
+        x="40" y="665" width="170" height="90" fill="none" stroke="#888"
+        stroke-dasharray="3,2" opacity="0.3"/>
+  <rect data-placeholder="panel-c-card-6"
+        x="220" y="665" width="170" height="90" fill="none" stroke="#888"
+        stroke-dasharray="3,2" opacity="0.3"/>
+  <rect data-placeholder="panel-c-card-7"
+        x="400" y="665" width="170" height="90" fill="none" stroke="#888"
+        stroke-dasharray="3,2" opacity="0.3"/>
+  <rect data-placeholder="panel-c-card-8"
+        x="580" y="665" width="170" height="90" fill="none" stroke="#888"
+        stroke-dasharray="3,2" opacity="0.3"/>
+
+  <!-- Bottom highlight box (red border = high-impact) -->
+  <rect x="40" y="775" width="710" height="130" rx="8"
+        fill="#FDF6F4" stroke="#A32D2D" stroke-width="1"/>
+  <rect x="40" y="775" width="710" height="22" rx="8" fill="#A32D2D"/>
+  <text id="panel-c-highlight-title" x="58" y="791"
+        font-size="13" font-weight="700" fill="#FFF">Highlight title</text>
+  <text id="panel-c-highlight-body-1" x="58" y="820"
+        font-size="11" fill="#444">Highlight body line 1</text>
+  <text id="panel-c-highlight-body-2" x="58" y="836"
+        font-size="11" fill="#444">Highlight body line 2</text>
+  <text id="panel-c-highlight-body-3" x="58" y="852"
+        font-size="11" fill="#444">Highlight body line 3</text>
+  <g data-placeholder="panel-c-flow"
+     transform="translate(495,860)"></g>
+
+  <!-- ===== PANEL D (bottom-right) — color theme: purple ===== -->
+  <rect x="820" y="480" width="760" height="440" rx="14"
+        fill="#F7F4FA" stroke="#8B5CB7" stroke-width="0.8"/>
+  <rect x="840" y="498" width="36" height="28" rx="6" fill="#8B5CB7"/>
+  <text x="858" y="518" font-size="18" font-weight="700"
+        fill="#FFFFFF" text-anchor="middle">d</text>
+  <text id="panel-d-title" x="888" y="518" font-size="20"
+        font-weight="700" fill="#6B3F9A">Panel D title</text>
+  <text id="panel-d-subtitle" x="840" y="548" font-size="13"
+        fill="#6B3F9A">Panel D subtitle text</text>
+
+  <rect data-placeholder="panel-d-card-1"
+        x="840" y="575" width="220" height="180" fill="none" stroke="#8B5CB7"
+        stroke-dasharray="3,2" opacity="0.3"/>
+  <rect data-placeholder="panel-d-card-2"
+        x="1080" y="575" width="220" height="180" fill="none" stroke="#8B5CB7"
+        stroke-dasharray="3,2" opacity="0.3"/>
+  <rect data-placeholder="panel-d-card-3"
+        x="1320" y="575" width="240" height="180" fill="none" stroke="#8B5CB7"
+        stroke-dasharray="3,2" opacity="0.3"/>
+
+  <rect x="840" y="820" width="720" height="85" rx="8"
+        fill="#F4EBF8" stroke="#8B5CB7" stroke-width="1"/>
+  <rect x="840" y="820" width="720" height="22" rx="8" fill="#8B5CB7"/>
+  <text id="panel-d-summary-title" x="858" y="836"
+        font-size="13" font-weight="700" fill="#FFF">Summary title</text>
+  <text id="panel-d-summary-body" x="858" y="860"
+        font-size="11" fill="#444">Summary body text</text>
+  <g data-placeholder="panel-d-flow"
+     transform="translate(1300,870)"></g>
+
+  <!-- ===== CENTRAL THEME ===== -->
+  <circle cx="800" cy="480" r="92" fill="#FFFFFF"
+          stroke="#1B3A6E" stroke-width="1.4"/>
+  <text id="central-line-1" x="800" y="468" font-size="20"
+        font-weight="700" fill="#1B3A6E" text-anchor="middle">Central</text>
+  <text id="central-line-2" x="800" y="492" font-size="20"
+        font-weight="700" fill="#1B3A6E" text-anchor="middle">theme</text>
+  <text id="central-caption-1" x="800" y="514" font-size="11"
+        fill="#666" text-anchor="middle">Caption line 1</text>
+  <text id="central-caption-2" x="800" y="528" font-size="11"
+        fill="#666" text-anchor="middle">Caption line 2</text>
+
+  <!-- arrows from central to four quadrants -->
+  <line x1="720" y1="430" x2="660" y2="400"
+        stroke="#888" stroke-width="2" marker-end="url(#arr)"/>
+  <line x1="880" y1="430" x2="940" y2="400"
+        stroke="#888" stroke-width="2" marker-end="url(#arr)"/>
+  <line x1="720" y1="530" x2="660" y2="560"
+        stroke="#888" stroke-width="2" marker-end="url(#arr)"/>
+  <line x1="880" y1="530" x2="940" y2="560"
+        stroke="#888" stroke-width="2" marker-end="url(#arr)"/>
+
+  <!-- ===== LEGEND BAR ===== -->
+  <rect x="20" y="935" width="1560" height="50" rx="8"
+        fill="#FAFAF7" stroke="#DDD" stroke-width="0.5"/>
+  <g data-placeholder="legend-row" transform="translate(30,950)"></g>
+
+</svg>

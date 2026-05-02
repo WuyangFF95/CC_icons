@@ -1,0 +1,106 @@
+# dark_proteome_manifest.yaml
+# Companion manifest for templates/dark_proteome_4panel_template.svg
+#
+# Workflow:
+#   1. Search elements with `library_tools.py search "alpha helix"` → copy IDs
+#   2. Fill below `panels:` map (placeholder ID → element ID or file path)
+#   3. Run: assemble_figure.py --template ... --manifest this.yaml --output fig.svg
+#
+# Two ways to reference an element:
+#   (A) Unified index ID (recommended after CC0 seed):
+#         panel-a-element-1: bioicons-alpha-helix-cartoon
+#       The script will look it up in ~/sci-illustration-library/library/index.json
+#
+#   (B) File path relative to library_root:
+#         panel-a-element-1: cells/treg-flat-v1.svg
+
+library_root: ~/sci-illustration-library
+
+# ===== ELEMENT SLOTS =====
+# Match keys to data-placeholder= attrs in the template SVG.
+# Replace these example values with real IDs from your library after running:
+#   python library_tools.py search "alpha helix"
+#   python library_tools.py search "T cell"  --license CC0
+panels:
+  # --- Panel A: structurally elusive proteins ---
+  panel-a-element-1:    bioicons-alpha-helix-cartoon       # α-helix folded domain
+  panel-a-element-2:    bioicons-disordered-region         # IDR squiggle
+  panel-a-chart:        manual-charts/protein-length-hist.svg
+  panel-a-row2:         manual-charts/plddt-color-bar.svg
+  panel-a-feature-1:    bioicons-phase-separation-droplet  # phase sep
+  panel-a-feature-2:    bioicons-signaling-hub             # hub network
+  panel-a-feature-3:    bioicons-flexible-binding          # flexible interactions
+
+  # --- Panel B: technically invisible proteins ---
+  panel-b-element-1:    manual-charts/microprotein-length-dist.svg
+  panel-b-element-2:    manual-charts/abundance-vs-msthreshold.svg
+  panel-b-icon-1:       bioicons-test-tube-low             # low expression
+  panel-b-icon-2:       bioicons-mass-spectrum-peaks       # below threshold
+  panel-b-icon-3:       bioicons-confused-protein-magnify  # missed by workflows
+
+  # --- Panel C: non-canonical protein products (8 cards) ---
+  panel-c-card-1:       bioicons-5utr-uorf
+  panel-c-card-2:       bioicons-overlapping-orf
+  panel-c-card-3:       bioicons-3utr-dorf
+  panel-c-card-4:       bioicons-lncrna-sorf
+  panel-c-card-5:       bioicons-circular-rna-sorf
+  panel-c-card-6:       bioicons-pri-mirna-hairpin
+  panel-c-card-7:       bioicons-erv-ltr-gag-pol
+  panel-c-card-8:       bioicons-cryptic-altsplice
+  panel-c-flow:         bioicons-peptide-hla-tcell-flow    # immunotherapy flow
+
+  # --- Panel D: annotation blind spots ---
+  panel-d-card-1:       bioicons-pseudogene-locus-flow
+  panel-d-card-2:       bioicons-te-line-sine-ltr
+  panel-d-card-3:       bioicons-poorly-annotated-orf-cloud
+  panel-d-flow:         bioicons-riboseq-deepms-flow
+
+  # --- Legend ---
+  legend-row:           manual-charts/legend-strip.svg
+
+# ===== TEXT LABELS =====
+# Match keys to id= attrs of <text> elements in the template SVG.
+labels:
+  fig-title: "Figure 1 | The dark proteome"
+
+  # Panel A
+  panel-a-title:    "Structurally elusive proteins"
+  panel-a-subtitle: "Intrinsically disordered proteins (IDPs) & regions (IDRs)"
+  panel-a-element-1-label: "Folded domain"
+  panel-a-element-2-label: "Intrinsically disordered region"
+  panel-a-element-3-label: "Protein length distribution"
+  panel-a-row2-label:      "AlphaFold pLDDT (per-residue confidence)"
+  panel-a-feature-label:   "Key features of IDPs/IDRs"
+  panel-a-feature-1-name:  "Phase separation"
+  panel-a-feature-2-name:  "Signaling hubs"
+  panel-a-feature-3-name:  "Flexible interactions"
+
+  # Panel B
+  panel-b-title:    "Technically invisible proteins"
+  panel-b-subtitle: "Microproteins (<100 aa) & low-abundance species below MS detection limit"
+  panel-b-element-1-label: "Protein length distribution"
+  panel-b-element-2-label: "Abundance vs MS detection threshold"
+  panel-b-icons-label:     "Detection challenges"
+  panel-b-icon-1-name:     "Low expression levels"
+  panel-b-icon-2-name:     "Below detection threshold"
+  panel-b-icon-3-name:     "Missed by standard workflows"
+
+  # Panel C
+  panel-c-title:    "Non-canonical protein products"
+  panel-c-subtitle: "uORFs · alternative reading frames · ERVs · circular / long non-coding RNAs · cryptic regions"
+  panel-c-highlight-title:  "Immunotherapeutic relevance"
+  panel-c-highlight-body-1: "Non-canonical products are tumour-specific (absent from normal self-antigens),"
+  panel-c-highlight-body-2: "HLA-presented, and enriched on malignant cells — priming candidates for"
+  panel-c-highlight-body-3: "T-cell receptor discovery and cancer vaccines."
+
+  # Panel D
+  panel-d-title:    "Annotation blind spots"
+  panel-d-subtitle: "Pseudogene-encoded · transposable element (TE)-derived · poorly annotated proteins"
+  panel-d-summary-title: "Why this matters"
+  panel-d-summary-body:  "Re-annotation with Ribo-seq + deep MS recovers thousands of candidate ORFs."
+
+  # Central
+  central-line-1:    "The"
+  central-line-2:    "dark proteome"
+  central-caption-1: "Proteins that escape"
+  central-caption-2: "conventional proteomic characterization"
