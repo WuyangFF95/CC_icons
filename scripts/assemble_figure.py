@@ -195,6 +195,61 @@ def _suspicious_id(panel_id: str) -> bool:
     return any(c in panel_id for c in ('"', "\n", "\r"))
 
 
+# Attributes that may carry a `url(#...)` reference or a bare `#id`.
+_REF_ATTRS = (
+    "href", "{http://www.w3.org/1999/xlink}href",
+    "clip-path", "mask", "filter",
+    "fill", "stroke",
+    "marker-start", "marker-mid", "marker-end",
+)
+
+
+def _namespace_subtree_ids(wrapper: etree._Element, prefix: str) -> None:
+    """Prefix every `id` and same-document reference inside `wrapper`.
+
+    When the same source SVG is dropped into multiple placeholders, deep-copying
+    its `<defs>` / `<clipPath>` / `<mask>` / `<linearGradient>` etc. produces
+    duplicate `id`s and `url(#xxx)` references that bind to whichever copy XML
+    visits first — wrong renders, broken selectors. We rewrite both sides.
+    """
+    # 1) Collect ids and rewrite the id attribute itself.
+    id_map: dict[str, str] = {}
+    for elem in wrapper.iter():
+        old_id = elem.get("id")
+        if old_id:
+            new_id = f"{prefix}-{old_id}"
+            id_map[old_id] = new_id
+            elem.set("id", new_id)
+    if not id_map:
+        return
+
+    def _rewrite_value(value: str) -> str:
+        new = value
+        for old_id, new_id in id_map.items():
+            new = new.replace(f"url(#{old_id})", f"url(#{new_id})")
+            new = new.replace(f'url("#{old_id}")', f'url("#{new_id}")')
+            new = new.replace(f"url('#{old_id}')", f"url('#{new_id}')")
+        return new
+
+    # 2) Rewrite reference attributes & style values.
+    for elem in wrapper.iter():
+        for attr in _REF_ATTRS:
+            val = elem.get(attr)
+            if not val:
+                continue
+            # Bare `#fragment` is an in-document reference; rewrite as a whole.
+            if val.startswith("#"):
+                old_id = val[1:]
+                if old_id in id_map:
+                    elem.set(attr, f"#{id_map[old_id]}")
+                continue
+            if "url(" in val:
+                elem.set(attr, _rewrite_value(val))
+        style = elem.get("style")
+        if style and "url(" in style:
+            elem.set("style", _rewrite_value(style))
+
+
 def fill_placeholders(template_path: Path, manifest: dict, output_path: Path) -> None:
     """Write a filled SVG with element bodies + label text + attribution caption."""
     parser = etree.XMLParser(remove_blank_text=False)
@@ -241,15 +296,17 @@ def fill_placeholders(template_path: Path, manifest: dict, output_path: Path) ->
             # `_find_placeholders` may return multiple hits for one panel_id;
             # suffix the wrapper id with the 1-based index so the output SVG
             # never has duplicate ids (which break selectors / a11y / editor
-            # validation).
+            # validation). Inserting at the placeholder's original index
+            # preserves SVG document order = z-order.
             for idx, placeholder in enumerate(placeholders, start=1):
                 parent = placeholder.getparent()
                 if parent is None:
                     continue
-                wrapper = etree.SubElement(
-                    parent, f"{SVG_TAG}g",
+                wrapper_id = f"panel-{panel_id}-{idx}"
+                wrapper = etree.Element(
+                    f"{SVG_TAG}g",
                     attrib={
-                        "id": f"panel-{panel_id}-{idx}",
+                        "id": wrapper_id,
                         "transform": placeholder.get("transform", ""),
                     },
                 )
@@ -257,7 +314,13 @@ def fill_placeholders(template_path: Path, manifest: dict, output_path: Path) ->
                 # SVG don't share node identity.
                 for child in elem_root:
                     wrapper.append(copy.deepcopy(child))
+                # Namespace inner ids+refs so multiple copies of the same
+                # source SVG don't produce id collisions or cross-bind
+                # `url(#…)` references to the wrong instance.
+                _namespace_subtree_ids(wrapper, wrapper_id)
+                insert_at = list(parent).index(placeholder)
                 parent.remove(placeholder)
+                parent.insert(insert_at, wrapper)
         else:
             # Use a file:// URI rather than a bare filesystem path so the
             # href stays valid across spaces in path components, Windows
@@ -268,8 +331,8 @@ def fill_placeholders(template_path: Path, manifest: dict, output_path: Path) ->
                 parent = placeholder.getparent()
                 if parent is None:
                     continue
-                etree.SubElement(
-                    parent, f"{SVG_TAG}image",
+                image_elem = etree.Element(
+                    f"{SVG_TAG}image",
                     attrib={
                         "id": f"panel-{panel_id}-{idx}",
                         "x": placeholder.get("x", "0"),
@@ -279,7 +342,9 @@ def fill_placeholders(template_path: Path, manifest: dict, output_path: Path) ->
                         XLINK_HREF: href_uri,
                     },
                 )
+                insert_at = list(parent).index(placeholder)
                 parent.remove(placeholder)
+                parent.insert(insert_at, image_elem)
 
         print(f"[fill] panel {panel_id} <- {element_value}")
 

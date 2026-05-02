@@ -261,9 +261,26 @@ def cmd_register(args: argparse.Namespace) -> int:
     target_dir = LIBRARY_ROOT / category
     target_dir.mkdir(parents=True, exist_ok=True)
 
+    # All three components are filename-only (no `/`, no `..`, no `\`). Slugify
+    # to `[a-z0-9-]` first, then sanity-check that the resulting absolute path
+    # never escapes the target category directory.
     safe_subject = re.sub(r"[^a-z0-9]+", "-", args.subject.lower()).strip("-")
-    target_file = f"{safe_subject}-{args.style}-v{args.version}.svg"
+    safe_style = re.sub(r"[^a-z0-9]+", "-", args.style.lower()).strip("-")
+    safe_version = re.sub(r"[^a-z0-9]+", "-", str(args.version).lower()).strip("-")
+    if not (safe_subject and safe_style and safe_version):
+        print("Error: --subject / --style / --version must contain at least "
+              "one alphanumeric character", file=sys.stderr)
+        return 1
+
+    target_file = f"{safe_subject}-{safe_style}-v{safe_version}.svg"
     target_path = target_dir / target_file
+    target_dir_resolved = target_dir.resolve()
+    if target_path.resolve().parent != target_dir_resolved:
+        # Defensive: slugification should already prevent this, but the check
+        # makes the path-traversal claim auditable rather than implicit.
+        print(f"Error: target path escapes {target_dir_resolved}", file=sys.stderr)
+        return 1
+
     target_path.write_bytes(src.read_bytes())
 
     index_path = target_dir / "_index.yaml"
@@ -630,12 +647,15 @@ def cmd_export(args: argparse.Namespace) -> int:
     records = load_unified_index()
     by_id = {r["id"]: r for r in records}
 
-    if args.ids:
+    if args.ids and not args.query:
         wanted_ids = args.ids.split(",")
         selected = [by_id[i] for i in wanted_ids if i in by_id]
-    elif args.query:
-        q = args.query.lower()
-        selected = [r for r in records if q in r.get("name", "").lower()][: args.max]
+    elif args.query or args.ids:
+        # Reuse the same filter as `preview` so the same query returns the
+        # same set in both commands. `_filter_for_grid` honours args.query
+        # against name+category+tags, narrows by args.ids if provided, and
+        # caps to args.max — matching preview's semantics.
+        selected = _filter_for_grid(args, records)
     else:
         print("Error: --ids or --query required", file=sys.stderr)
         return 1

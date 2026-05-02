@@ -380,9 +380,15 @@ def download_phylopic(target_root: Path, max_count: int | None = None) -> list[d
             seen_ids.add(uuid)
 
             links = item.get("_links") or {}
-            vf = links.get("vectorFile") or links.get("sourceFile") or {}
+            # Only ingest from `vectorFile`. `sourceFile` may be a raster
+            # (PNG/JPEG) which would silently corrupt downstream tooling
+            # (etree.parse, cairosvg) when saved with a `.svg` extension.
+            # The library is SVG-only by design; raster fallbacks belong in
+            # a separate ingestion path.
+            vf = links.get("vectorFile") or {}
             href = vf.get("href")
-            if not href:
+            vf_type = (vf.get("type") or "").lower()
+            if not href or "svg" not in vf_type:
                 continue
 
             specific_node = links.get("specificNode") or {}
@@ -394,18 +400,24 @@ def download_phylopic(target_root: Path, max_count: int | None = None) -> list[d
             license_short = "CC0" if is_cc0 else "CC-BY"
             attribution = "" if is_cc0 else f"PhyloPic image by {contributor} (CC BY)"
 
+            # Use 12 hex chars instead of 8: at PhyloPic's ~12 000 records the
+            # birthday-paradox collision rate drops from ~1.7% (32-bit prefix)
+            # to ~3e-5 (48-bit prefix). The cost is a slightly longer ID/file
+            # name, which is fine.
+            uuid_short = uuid[:12]
+
             try:
                 # PhyloPic returns absolute URLs already; no urljoin needed.
                 file_resp = requests.get(href, timeout=20)
                 if file_resp.status_code != 200:
                     continue
-                target_path = target_subdir / f"phylopic-{uuid[:8]}-{slugify(name)}.svg"
+                target_path = target_subdir / f"phylopic-{uuid_short}-{slugify(name)}.svg"
                 target_path.write_bytes(file_resp.content)
             except Exception:
                 continue
 
             rec = make_record(
-                "phylopic", uuid[:8], name, ["silhouette"],
+                "phylopic", uuid_short, name, ["silhouette"],
                 file_relpath=str(target_path.relative_to(library_dir)),
                 license_override=license_short,
                 attribution_override=attribution,
