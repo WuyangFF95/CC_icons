@@ -286,6 +286,14 @@ def cmd_register(args: argparse.Namespace) -> int:
         "used_in": [],
         "license": args.license,
     }
+    # Upsert by file: re-running `register` overwrites the on-disk SVG, and
+    # the metadata must reflect the new run. Otherwise `load_unified_index()`
+    # dedupes by derived id and pins the *first* row, so search/export/
+    # attribution would keep showing stale metadata.
+    index["elements"] = [
+        existing for existing in index["elements"]
+        if existing.get("file") != target_file
+    ]
     index["elements"].append(entry)
     index_path.write_text(yaml.safe_dump(index, allow_unicode=True, sort_keys=False))
 
@@ -362,22 +370,42 @@ def cmd_search(args: argparse.Namespace) -> int:
 
 
 def cmd_audit(args: argparse.Namespace) -> int:
-    """Sweep every category directory and list QC failures."""
+    """QC every SVG in the unified index (CC0 bulk + legacy YAML rows).
+
+    Walking the unified index instead of a CATEGORIES dir glob means
+    bootstrapped CC0 assets under e.g. `library/cells/immune/` are no longer
+    silently skipped — those rows are merged into the index by
+    `load_unified_index()`. Non-SVG assets (.png/.ai/.emf) are out of scope
+    for QC (it inspects path/text/gradient counts) and are skipped here.
+    """
     failed: list[tuple[Path, dict]] = []
     total = 0
-    for category in CATEGORIES:
-        cat_dir = LIBRARY_ROOT / category
-        if not cat_dir.exists():
+    seen: set[Path] = set()
+    for record in load_unified_index():
+        svg = resolve_svg_path(record)
+        if svg.suffix.lower() != ".svg":
             continue
-        for svg in cat_dir.glob("*.svg"):
-            total += 1
-            qc = quality_check(svg)
-            if not qc["pass"]:
-                failed.append((svg, qc))
+        try:
+            resolved = svg.resolve()
+        except OSError:
+            continue
+        if resolved in seen or not svg.exists():
+            continue
+        seen.add(resolved)
+        total += 1
+        qc = quality_check(svg)
+        if not qc["pass"]:
+            failed.append((svg, qc))
 
     print(f"\nAudit complete: {total} elements scanned, {len(failed)} failed QC.\n")
     for svg, qc in failed:
-        print(f"  FAIL: {svg.relative_to(LIBRARY_ROOT)}")
+        # `try/except` guards against unified-index paths outside LIBRARY_ROOT
+        # (would happen if a record's `_root` points elsewhere).
+        try:
+            label = svg.relative_to(LIBRARY_ROOT)
+        except ValueError:
+            label = svg
+        print(f"  FAIL: {label}")
         for check_name, (passed, detail) in qc["checks"].items():
             if not passed:
                 print(f"    - {check_name}: {detail}")
@@ -406,11 +434,18 @@ def cmd_check(args: argparse.Namespace) -> int:
     for req in manifest.get("elements_needed", []):
         found = False
         # Tier 1: unified index (CC0 bulk + already-merged legacy rows).
+        # CC0 record `tags` carry content categories (e.g. ["immune"],
+        # ["silhouette"]), not visual style names like "flat-blue", so the
+        # style guard MUST treat an unspecified style as a wildcard rather
+        # than as the empty string "in" tags. Also, when a style IS
+        # specified, an empty `tags` list still shouldn't auto-fail — fall
+        # through to the legacy YAML tier below.
+        req_style = (req.get("style") or "").lower()
         for r in unified_records:
             name = (r.get("name") or "").lower()
             tags = [(t or "").lower() for t in r.get("tags", [])]
-            if (req["subject"].lower() in name
-                    and (req.get("style") or "") in tags):
+            style_ok = (not req_style) or (req_style in tags)
+            if req["subject"].lower() in name and style_ok:
                 have.append((req, r.get("category", ""), r.get("file", "")))
                 found = True
                 break

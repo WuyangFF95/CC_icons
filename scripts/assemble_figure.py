@@ -27,6 +27,7 @@ from __future__ import annotations
 import argparse
 import copy
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -237,14 +238,18 @@ def fill_placeholders(template_path: Path, manifest: dict, output_path: Path) ->
                       file=sys.stderr)
                 continue
 
-            for placeholder in placeholders:
+            # `_find_placeholders` may return multiple hits for one panel_id;
+            # suffix the wrapper id with the 1-based index so the output SVG
+            # never has duplicate ids (which break selectors / a11y / editor
+            # validation).
+            for idx, placeholder in enumerate(placeholders, start=1):
                 parent = placeholder.getparent()
                 if parent is None:
                     continue
                 wrapper = etree.SubElement(
                     parent, f"{SVG_TAG}g",
                     attrib={
-                        "id": f"panel-{panel_id}",
+                        "id": f"panel-{panel_id}-{idx}",
                         "transform": placeholder.get("transform", ""),
                     },
                 )
@@ -259,14 +264,14 @@ def fill_placeholders(template_path: Path, manifest: dict, output_path: Path) ->
             # drive letters, and `xmllint`/browser SVG renderers that treat
             # naked paths as relative.
             href_uri = element_full_path.resolve().as_uri()
-            for placeholder in placeholders:
+            for idx, placeholder in enumerate(placeholders, start=1):
                 parent = placeholder.getparent()
                 if parent is None:
                     continue
                 etree.SubElement(
                     parent, f"{SVG_TAG}image",
                     attrib={
-                        "id": f"panel-{panel_id}",
+                        "id": f"panel-{panel_id}-{idx}",
                         "x": placeholder.get("x", "0"),
                         "y": placeholder.get("y", "0"),
                         "width": placeholder.get("width", "100"),
@@ -303,7 +308,12 @@ def fill_placeholders(template_path: Path, manifest: dict, output_path: Path) ->
             for r in used_attribution
         })
         attr_text = "Adapted from: " + "; ".join(attr_lines)
-        viewbox = (root.get("viewBox") or "0 0 1600 1000").split()
+        # Per SVG spec, viewBox values are separated by whitespace, comma, or
+        # both (e.g. "0, 0, 1600, 1000" is valid). `.split()` only handles
+        # whitespace and would either silently fall back to defaults or, worse,
+        # raise ValueError on `float("1600,")`. Use a comma+whitespace regex.
+        viewbox_raw = (root.get("viewBox") or "0 0 1600 1000").strip()
+        viewbox = [v for v in re.split(r"[\s,]+", viewbox_raw) if v]
         canvas_w = float(viewbox[2]) if len(viewbox) >= 4 else 1600.0
         canvas_h = float(viewbox[3]) if len(viewbox) >= 4 else 1000.0
         attr_node = etree.SubElement(
