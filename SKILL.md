@@ -41,15 +41,26 @@ allowed-tools:
 flowchart LR
     A[科研 figure 需求<br/>Fig1 / TOC /<br/>graphical abstract<br/>可选 PNG 底图输入] --> B[0. Bootstrap<br/>CC0 元件库 ~17000<br/>download_cc0_seed.py --all]
     B --> C[1. LLM 写 SVG 骨架<br/>MiniMax 首选<br/>量大 / 便宜 / 清晰<br/>备选 Claude / GLM-5.1 / GPT-5]
-    C --> D[2. 搜库填元件<br/>library_tools.py search<br/>CC0 优先<br/>Recraft 4 Vector / 4 Vector Pro<br/>前者便宜<br/>元件丑陋则用后者<br/>补半立体或缺失元件]
-    D --> E[3. 模板装配<br/>assemble_figure.py<br/>+ 自动 CC-BY 归属注入<br/>+ 字体规范化]
+    C --> D1[2a. 搜 CC0 库<br/>library_tools.py search]
+    D1 -->|命中| E
+    D1 -->|缺色块/半立体元件| D2[2b. Recraft 4 Vector / 4 Vector Pro<br/>前者便宜<br/>元件丑陋则用后者<br/>直出色块 SVG]
+    D1 -->|缺轮廓/结构化元件| D3[2c. 高级 PNG 模型<br/>GPT Image 2 等<br/>只画身体/翅膀/触手轮廓<br/>不画内部色块, 类素描风]
+    D3 --> D4[2c'. PNG → SVG 矢量化<br/>vectorizer.ai / Inkscape Trace<br/>线稿矢量化质量高]
+    D4 --> D5[2c''. Inkscape 着色<br/>套项目色板]
+    D2 --> E
+    D5 --> E
+    E[3. 模板装配<br/>assemble_figure.py<br/>+ 自动 CC-BY 归属注入<br/>+ 字体规范化]
     E --> F[4. Inkscape / PowerPoint 微调<br/>修文字碰撞<br/>5-10 分钟<br/>只配一个 MCP 就用所配那个]
     F --> G[5. 导出<br/>SVG 编辑<br/>PDF 投稿<br/>PPTX 汇报]
 
     style A fill:#FFFFFF,stroke:#1B3A6E,stroke-width:2px,color:#1B3A6E
     style B fill:#F2F8FD,stroke:#2E7CD6,color:#1B5BA0
     style C fill:#F2FAF4,stroke:#4FA85F,stroke-width:3px,color:#2E7B3D
-    style D fill:#F8F8F4,stroke:#888,color:#333
+    style D1 fill:#F8F8F4,stroke:#888,color:#333
+    style D2 fill:#F8F8F4,stroke:#888,color:#333
+    style D3 fill:#FFF6E5,stroke:#C8A431,color:#7A5D14
+    style D4 fill:#FFF6E5,stroke:#C8A431,color:#7A5D14
+    style D5 fill:#FFF6E5,stroke:#C8A431,color:#7A5D14
     style E fill:#F7F4FA,stroke:#8B5CB7,color:#6B3F9A
     style F fill:#FDF6F4,stroke:#A32D2D,color:#A32D2D
     style G fill:#FAFAF7,stroke:#666,stroke-width:2px,color:#333
@@ -58,7 +69,8 @@ flowchart LR
 读图速记：
 
 - **Bootstrap 一次到位**（步骤 0，约一晚）→ 后续每个项目从步骤 1 开始
-- **整图骨架 ≠ 元件**：骨架用 LLM 写代码（步骤 1，**MiniMax 首选**），元件来自 CC0 库（步骤 2）
+- **整图骨架 ≠ 元件**：骨架用 LLM 写代码（步骤 1，**MiniMax 首选**），元件走步骤 2 的 DAG
+- **步骤 2 是 DAG 不是单点**：CC0 命中直进装配；缺色块/半立体元件走 **Recraft 色块 SVG**；缺轮廓/结构化元件（如蟑螂的身体+翅膀+触手）走 **GPT Image 2 等高级 PNG → 素描风轮廓 → 矢量化 → Inkscape 着色** 三段链，最后这条对昆虫触角、神经元突起、解剖切面线条等"结构化但 CC0 库未必覆盖"的元件最划算
 - **机器主导步骤 0–3、5；人主导步骤 4**（视觉层级和文字内容由人决定）
 - **每张投稿图都带可追溯的 attribution 清单**（步骤 3 自动注入，步骤 5 同步导出）
 
