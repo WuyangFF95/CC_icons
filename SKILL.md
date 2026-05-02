@@ -41,7 +41,7 @@ allowed-tools:
 
 | 章节 | v0.1.0 | v0.1.1 修订 |
 |---|---|---|
-| 整图主力 provider | Recraft V3 + 矢量化 | **LLM 直出 SVG 代码**（Claude / MiniMax / GLM-5.1 / GPT-5）|
+| 整图主力 provider | Recraft V3 + 矢量化 | **LLM 直出 SVG 代码**（**MiniMax M-series 首选**：量大管饱 / 清晰 / 色块少 / 比 Recraft 便宜 / 适合带文字 + placeholder；备选 Claude / GLM-5.1 / GPT-5）|
 | Recraft 定位 | 整图 + 元件 | **元件补强**（α-helix / 受体 / 立体器官等半立体元件）|
 | 文字处理 | 提示词避免 | **LLM 路径天然真节点**，仅需 Inkscape 修文字碰撞 |
 | 排版自动化 Level 3 | 标"完全自动化不可能" | **限定为"扩散模型路径不可能"**，LLM 路径 + 元件库可行 |
@@ -262,6 +262,19 @@ ViewBox 1600×1000. Constraints:
 - Output ONLY the SVG code, no markdown fence
 ```
 
+#### 写 SVG 代码的 LLM provider 选型
+
+| Provider | 文字 | 节点密度 | 量大管饱? | 单价倾向 | 推荐场景 |
+|---|---|---|---|---|---|
+| **MiniMax M-series** | 真节点（中英都强） | 低（色块少、清晰） | ✅ 量大管饱 | **比 Recraft 便宜** | **首选**：含**文字 + placeholder** 的 SVG / PDF（投稿 figure / TOC / graphical abstract）|
+| Claude (Visualizer / 直接对话) | 真节点 | 低 | ⚠️ 视套餐 | 中 | 复杂语义（如 "把这条 pathway 重新组织"），需要推理时 |
+| GLM-5.1 | 真节点（中文极强） | 中 | ✅ | 低 | 中文标题/标注密集场景 |
+| GPT-5 | 真节点 | 中 | ⚠️ 视套餐 | 中-高 | 需精细 prompt 控制 / 严格遵照规格时 |
+
+**MiniMax 主战场**：当一张图里包含**多个文字标签 + 待填 placeholder + 图形元件**时（即典型 4-panel figure），MiniMax 既能保证文字真节点，又能把色块画得简洁规范，且**单价低，可批量重试**——比 Recraft 整图链便宜多倍，是 v0.1.1 默认推荐路径。
+
+⚠️ **MiniMax 不做 PNG → SVG 矢量化**。如需把扩散模型出来的 PNG 转 SVG，走 §二（vectorizer.ai / Inkscape Trace），不要让 MiniMax 接 PNG 输入。
+
 修复文字碰撞（LLM 路径的固有失败模式）：
 
 ```bash
@@ -274,28 +287,38 @@ inkscape figure.svg
 
 ### 1.1 单元件 provider（按元件类型）
 
+> 这一节只覆盖**单元件**（cell / receptor / enzyme 之类的图标素材）。整图（Fig1 / TOC / graphical abstract）走 §1.0a 的 LLM 写 SVG 路径，**MiniMax / Claude / GLM-5.1 / GPT-5 是整图主力，不在本表中重复**。
+
 | 元件类型 | 首选 | 备选 | 避免 |
 |---|---|---|---|
 | 抽象生物元件（细胞、蛋白）| **Recraft V3** (vector) | Gemini Imagen 4 | OpenAI DALL-E |
 | 写实解剖结构（器官、组织）| **Gemini Imagen 4** | OpenAI gpt-image | Recraft (太抽象) |
-| 中文标签 / 中文场景 | **智谱 CogView-4** | MiniMax | Recraft (中文糊) |
+| 中文标签 / 中文场景（PNG 路径）| **智谱 CogView-4** | OpenAI gpt-image | Recraft (中文糊) |
 | 实验装置（仪器、培养皿）| **Recraft V3** | Gemini Imagen 4 | - |
 | 信号通路单点（受体激活等）| **Recraft V3** | - | - |
 | 流程图节点（圆角矩形等）| **不要用 AI** | 直接用 Inkscape/PPT 画 | 任何 AI |
 | 手绘风/插画风 | OpenAI gpt-image | Gemini | Recraft (太程式化) |
 
+> **MiniMax 不在本表里**：MiniMax 没有 PNG → SVG 矢量化能力，强项是直接写 SVG 代码（见 §1.0a）。把它当 PNG 元件 provider 用是错配；中文 PNG 元件场景由 CogView-4 覆盖即可。
+
 ### 1.2 按输出格式区分
 
-| Provider | 直出 SVG | 直出 PNG | 中文 | 一致性 (style ref) |
-|---|---|---|---|---|
-| Recraft V3 | ✅ | ✅ | 弱 | ✅ 强 |
-| OpenAI gpt-image | ❌ | ✅ | 中 | ❌ 无 style API |
-| Gemini Imagen 4 | ❌ | ✅ | 中 | ⚠️ 通过 reference image |
-| 智谱 GLM CogView-4 | ❌ | ✅ | **强** | ❌ |
-| MiniMax | ❌ | ✅ | **强** | ❌ |
+把"出 SVG"拆成两条**根本不同**的产能：扩散模型直出 vs LLM 写代码。前者文字必糊（v0.1.1 已实证），后者文字真节点。两个不能合并成一列。
 
-**关键推论**：除了 Recraft 直出 SVG，其他全部需要 PNG → SVG 矢量化步骤。
-矢量化质量取决于元件复杂度——单元件简单背景，矢量化效果可接受。
+| Provider | LLM 写 SVG 代码 | 扩散直出 SVG | 直出 PNG | 中文 | style ref |
+|---|---|---|---|---|---|
+| **MiniMax M-series** | ✅ **强**（量大管饱、清晰、色块少、便宜） | ❌ | ✅ | **强** | ❌ |
+| Claude (Visualizer / 对话) | ✅ 强（推理强） | ❌ | ❌ | 强 | ❌ |
+| GLM-5.1 | ✅ 中 | — | ✅（CogView-4）| **强** | ❌ |
+| GPT-5 | ✅ 中（按规格严谨） | ❌ | ✅（gpt-image）| 中 | ❌ |
+| Recraft V3 | ❌ | ✅（**文字必糊**，仅适合无字元件）| ✅ | 弱 | ✅ 强 |
+| Gemini Imagen 4 | ❌ | ❌ | ✅ | 中 | ⚠️ via reference image |
+| OpenAI gpt-image | ❌ | ❌ | ✅ | 中 | ❌ |
+
+**关键推论（v0.1.1 修订）**：
+- 整图走「LLM 写 SVG 代码」第一档（MiniMax 首选，便宜+量大），文字真节点 → 直接可投稿；
+- 单元件走「扩散直出 SVG / PNG → 矢量化」（Recraft V3 / Gemini / CogView-4），但**禁文字**；
+- 同一 provider 两种产能不要混用（不要让 Recraft 出整图，不要让 MiniMax 接 PNG 矢量化）。
 
 ### 1.3 MCP 端点配置参考
 
@@ -349,7 +372,13 @@ inkscape figure.svg
 
 ## 二、PNG → SVG 矢量化层
 
-非 Recraft 来源的元件必须经此步骤。
+> **本节只针对**走"扩散模型 / 栅格 provider 出 PNG → 转 SVG"路径的**单元件**生成。
+>
+> **MiniMax / Claude / GLM-5.1 / GPT-5 不走这一节** —— 它们直接撰写 SVG 代码（§1.0a），既没有 PNG → SVG 矢量化能力，也不需要这条链。把 MiniMax 的 PNG 输出再去走 vectorizer.ai 是错配。
+>
+> 本节适用：Recraft V3 (vector 端点之外的) / Gemini Imagen 4 / OpenAI gpt-image / 智谱 CogView-4 出的 PNG。
+
+非 LLM-写-SVG 来源的元件必须经此步骤。
 
 ### 矢量化方案对比
 
