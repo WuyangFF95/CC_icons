@@ -257,11 +257,18 @@ def download_bioicons(target_root: Path) -> list[dict]:
             name = svg.stem.replace("_", " ").replace("-", " ")
             tags = [category_hint] if category_hint else []
 
-            tmp = make_record("bioicons", slugify(svg.stem), name, tags, file_relpath="")
+            # Slugify the full repo-relative path (sans extension) so two
+            # SVGs that share a stem under different categories end up with
+            # distinct ids/filenames. With only `slugify(svg.stem)` they'd
+            # collide on disk and `merge_index` would silently drop one.
+            relpath_sans_ext = str(relpath_in_repo.with_suffix(""))
+            item_slug = slugify(relpath_sans_ext.replace("/", "-"))
+
+            tmp = make_record("bioicons", item_slug, name, tags, file_relpath="")
             target_subdir = library_dir / tmp["category"]
             target_subdir.mkdir(parents=True, exist_ok=True)
 
-            target_path = target_subdir / f"bioicons-{slugify(svg.stem)}.svg"
+            target_path = target_subdir / f"bioicons-{item_slug}.svg"
             shutil.copy2(svg, target_path)
 
             tmp["file"] = str(target_path.relative_to(library_dir))
@@ -518,14 +525,21 @@ def download_reactome(target_root: Path) -> list[dict]:
     for svg in tqdm(svg_files, desc="  Importing", unit="icon"):
         try:
             name = svg.stem.replace("_", " ")
-            relpath_parts = svg.relative_to(repo_dir).parts
+            relpath_in_repo = svg.relative_to(repo_dir)
+            relpath_parts = relpath_in_repo.parts
             category_hint = relpath_parts[0] if len(relpath_parts) > 1 else ""
             tags = [category_hint] if category_hint else []
 
-            tmp = make_record("reactome", slugify(svg.stem), name, tags, file_relpath="")
+            # Slugify the full repo-relative path so two icons sharing a
+            # stem under different parent dirs don't collide on disk and
+            # silently get deduped to one row by merge_index().
+            relpath_sans_ext = str(relpath_in_repo.with_suffix(""))
+            item_slug = slugify(relpath_sans_ext.replace("/", "-"))
+
+            tmp = make_record("reactome", item_slug, name, tags, file_relpath="")
             target_subdir = library_dir / tmp["category"]
             target_subdir.mkdir(parents=True, exist_ok=True)
-            target_path = target_subdir / f"reactome-{slugify(svg.stem)}.svg"
+            target_path = target_subdir / f"reactome-{item_slug}.svg"
             shutil.copy2(svg, target_path)
             tmp["file"] = str(target_path.relative_to(library_dir))
             records.append(tmp)

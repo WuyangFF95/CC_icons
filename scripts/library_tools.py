@@ -44,15 +44,24 @@ from pathlib import Path
 import yaml
 from lxml import etree
 
-# Optional deps — lazy-checked per command.
+# Optional deps — lazy-checked per command and per asset type.
 # Catch both ImportError (package missing) and OSError (e.g. cairosvg installed
 # but libcairo system library missing on the host).
+#
+# The two flags are split intentionally: `cairosvg` is only needed to
+# rasterize SVG; bitmap-only workflows (preview/export of .png/.jpg from a
+# library that's all PhyloPic raster fallbacks etc.) can run on Pillow alone.
+try:
+    from PIL import Image, ImageDraw, ImageFont
+    HAS_PILLOW = True
+except (ImportError, OSError):
+    HAS_PILLOW = False
+
 try:
     import cairosvg
-    from PIL import Image, ImageDraw, ImageFont
-    HAS_PREVIEW = True
+    HAS_CAIROSVG = True
 except (ImportError, OSError):
-    HAS_PREVIEW = False
+    HAS_CAIROSVG = False
 
 try:
     from pptx import Presentation
@@ -556,9 +565,10 @@ def _filter_for_grid(args: argparse.Namespace, records: list[dict]) -> list[dict
 
 def cmd_preview(args: argparse.Namespace) -> int:
     """Render a thumbnail grid of matched elements as a single PNG."""
-    if not HAS_PREVIEW:
-        print("Error: cmd preview requires `cairosvg` and `Pillow`", file=sys.stderr)
-        print("       pip install cairosvg pillow", file=sys.stderr)
+    if not HAS_PILLOW:
+        print("Error: cmd preview requires `Pillow` (always) and `cairosvg` "
+              "(when any asset is SVG)", file=sys.stderr)
+        print("       pip install pillow cairosvg", file=sys.stderr)
         return 1
 
     matches = _filter_for_grid(args, load_unified_index())
@@ -595,6 +605,11 @@ def cmd_preview(args: argparse.Namespace) -> int:
         ext = svg_path.suffix.lower()
         try:
             if ext == ".svg":
+                if not HAS_CAIROSVG:
+                    draw.rectangle([x, y, x + cell, y + cell], outline="#888")
+                    draw.text((x + 4, y + 4), "cairosvg missing",
+                              fill="#888", font=font)
+                    continue
                 png_bytes = cairosvg.svg2png(
                     url=str(svg_path),
                     output_width=cell,
@@ -640,9 +655,9 @@ def cmd_export(args: argparse.Namespace) -> int:
         print("Error: cmd export requires `python-pptx`", file=sys.stderr)
         print("       pip install python-pptx", file=sys.stderr)
         return 1
-    if not HAS_PREVIEW:
-        print("Error: cmd export also needs `cairosvg` + `Pillow`", file=sys.stderr)
-        return 1
+    # Pillow is only needed if we have to peek at bitmaps; cairosvg is only
+    # needed to rasterize SVG. We check per-asset below; the only hard
+    # gate here is python-pptx (no point continuing without it).
 
     records = load_unified_index()
     by_id = {r["id"]: r for r in records}
@@ -682,6 +697,10 @@ def cmd_export(args: argparse.Namespace) -> int:
             # python-pptx accepts .png/.jpg directly; .svg must be rasterized;
             # other formats (.ai/.eps/.emf/.wmf) need an external converter.
             if ext == ".svg":
+                if not HAS_CAIROSVG:
+                    print(f"  [skip] {r['id']}: SVG asset needs cairosvg "
+                          "(pip install cairosvg)", file=sys.stderr)
+                    continue
                 picture_path = tmp_dir / f"{r['id']}.png"
                 try:
                     cairosvg.svg2png(

@@ -232,6 +232,7 @@ def _namespace_subtree_ids(wrapper: etree._Element, prefix: str) -> None:
         return new
 
     # 2) Rewrite reference attributes & style values.
+    style_tag = f"{SVG_TAG}style"
     for elem in wrapper.iter():
         for attr in _REF_ATTRS:
             val = elem.get(attr)
@@ -248,6 +249,12 @@ def _namespace_subtree_ids(wrapper: etree._Element, prefix: str) -> None:
         style = elem.get("style")
         if style and "url(" in style:
             elem.set("style", _rewrite_value(style))
+        # `<style>…</style>` text nodes also carry CSS rules with url(#…)
+        # references that many SVG exporters emit (Inkscape, Affinity, etc.).
+        # Without rewriting these, an SVG with stylesheet-bound clip-paths
+        # gets cross-bound to the wrong copy when the same source is reused.
+        if elem.tag == style_tag and elem.text and "url(" in elem.text:
+            elem.text = _rewrite_value(elem.text)
 
 
 def fill_placeholders(template_path: Path, manifest: dict, output_path: Path) -> None:
@@ -276,8 +283,10 @@ def fill_placeholders(template_path: Path, manifest: dict, output_path: Path) ->
             continue
 
         attr_record = lookup_attribution(element_value, library_root)
-        if attr_record is not None:
-            used_attribution.append(attr_record)
+        # Track whether anything actually got inserted onto the canvas; we
+        # only credit attribution after a successful fill so a failed parse
+        # / missing placeholder / continue branch can't pollute the caption.
+        inserted_any = False
 
         placeholders = _find_placeholders(root, panel_id)
         if not placeholders:
@@ -321,6 +330,7 @@ def fill_placeholders(template_path: Path, manifest: dict, output_path: Path) ->
                 insert_at = list(parent).index(placeholder)
                 parent.remove(placeholder)
                 parent.insert(insert_at, wrapper)
+                inserted_any = True
         else:
             # Use a file:// URI rather than a bare filesystem path so the
             # href stays valid across spaces in path components, Windows
@@ -331,20 +341,30 @@ def fill_placeholders(template_path: Path, manifest: dict, output_path: Path) ->
                 parent = placeholder.getparent()
                 if parent is None:
                     continue
-                image_elem = etree.Element(
-                    f"{SVG_TAG}image",
-                    attrib={
-                        "id": f"panel-{panel_id}-{idx}",
-                        "x": placeholder.get("x", "0"),
-                        "y": placeholder.get("y", "0"),
-                        "width": placeholder.get("width", "100"),
-                        "height": placeholder.get("height", "100"),
-                        XLINK_HREF: href_uri,
-                    },
-                )
+                # Carry placeholder's `transform` so PNG/JPG/EMF land in the
+                # same spot the SVG branch would: scale / rotate / translate
+                # set on the placeholder all apply to the resulting <image>.
+                image_attrib = {
+                    "id": f"panel-{panel_id}-{idx}",
+                    "x": placeholder.get("x", "0"),
+                    "y": placeholder.get("y", "0"),
+                    "width": placeholder.get("width", "100"),
+                    "height": placeholder.get("height", "100"),
+                    XLINK_HREF: href_uri,
+                }
+                ph_transform = placeholder.get("transform")
+                if ph_transform:
+                    image_attrib["transform"] = ph_transform
+                image_elem = etree.Element(f"{SVG_TAG}image", attrib=image_attrib)
                 insert_at = list(parent).index(placeholder)
                 parent.remove(placeholder)
                 parent.insert(insert_at, image_elem)
+                inserted_any = True
+
+        # Only count this asset toward the figure's attribution once at
+        # least one placeholder was actually filled in.
+        if inserted_any and attr_record is not None:
+            used_attribution.append(attr_record)
 
         print(f"[fill] panel {panel_id} <- {element_value}")
 
