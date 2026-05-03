@@ -322,8 +322,8 @@ ViewBox 1600×1000. Constraints:
 # Inkscape GUI 微调，5-10 分钟
 inkscape figure.svg
 
-# 或用脚本检测 bbox 冲突（待 v0.2 实现）
-# python scripts/text_collision_check.py figure.svg
+# 或用脚本批量检测 bbox 冲突
+python scripts/text_collision_check.py figure.svg
 ```
 
 ### 1.1 单元件 provider（按元件类型）
