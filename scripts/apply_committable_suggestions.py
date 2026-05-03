@@ -37,7 +37,7 @@ from pathlib import Path
 
 
 SUGGESTION_RE = re.compile(
-    r"```suggestion\s*\n(?P<body>.*?)\n```",
+    r"```suggestion\s*\n(?P<body>.*?)\n?```",
     re.DOTALL,
 )
 
