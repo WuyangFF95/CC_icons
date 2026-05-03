@@ -1,0 +1,27 @@
+name: Science
+publisher: AAAS
+url: https://www.science.org/content/page/instructions-preparing-initial-manuscript
+
+sizes:
+  single_column: { width_mm: 55,  max_height_mm: 240 }
+  double_column: { width_mm: 120, max_height_mm: 240 }
+  page_width:    { width_mm: 183, max_height_mm: 240 }
+
+fonts:
+  preferred: [Helvetica, Arial]
+  forbidden: [Comic Sans, Papyrus]
+
+font_size:
+  min_pt: 5
+  max_pt: 8
+
+line_weight:
+  min_pt: 0.5
+
+color_mode: RGB
+file_formats: [pdf, ai, eps, tif]
+
+notes: |
+  Science uses three width tiers (55 / 120 / 183 mm). Helvetica is
+  the preferred sans-serif. Multi-panel figures use bold uppercase
+  labels ("A", "B", …). Schematic line weights ≥ 0.5 pt at final size.

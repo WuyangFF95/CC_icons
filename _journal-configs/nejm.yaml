@@ -1,0 +1,27 @@
+name: New England Journal of Medicine
+publisher: Massachusetts Medical Society
+url: https://www.nejm.org/author-center
+
+sizes:
+  single_column: { width_mm: 80,  max_height_mm: 230 }
+  double_column: { width_mm: 165, max_height_mm: 230 }
+
+fonts:
+  preferred: [Helvetica, Arial]
+  forbidden: [Comic Sans, Papyrus]
+
+font_size:
+  min_pt: 7
+  max_pt: 10
+
+line_weight:
+  min_pt: 0.5
+
+color_mode: RGB
+file_formats: [pdf, eps, tif, ai]
+
+notes: |
+  NEJM redraws all figures in-house from author-supplied source files,
+  so consistency with the journal style is less critical than legibility
+  and clinical accuracy at the supplied final size. Provide editable
+  vector wherever possible (PDF / EPS / AI).

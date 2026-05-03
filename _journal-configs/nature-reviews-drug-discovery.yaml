@@ -1,0 +1,28 @@
+name: Nature Reviews Drug Discovery
+publisher: Springer Nature
+url: https://www.nature.com/nrd/about/figure-guide
+
+sizes:
+  single_column: { width_mm: 88,  max_height_mm: 240 }
+  double_column: { width_mm: 180, max_height_mm: 240 }
+
+fonts:
+  preferred: [Arial, Helvetica]
+  forbidden: [Comic Sans, Papyrus, Wingdings]
+
+font_size:
+  min_pt: 6
+  max_pt: 12
+
+line_weight:
+  min_pt: 0.5
+
+color_mode: RGB
+file_formats: [pdf, eps, ai]
+
+notes: |
+  Nature Reviews journals use a layout-heavy style (4-panel Fig1 with
+  central theme, color-coded panels, legend strip — exactly the layout
+  the dark_proteome template targets). Sans-serif throughout, color
+  palette restricted, panel labels (a/b/c/d) in bold. Schemes preferred
+  over photos; vector preferred over raster.

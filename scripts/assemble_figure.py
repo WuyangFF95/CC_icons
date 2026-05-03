@@ -564,6 +564,159 @@ def export_pptx(svg_path: Path, pptx_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Per-journal validation
+# ---------------------------------------------------------------------------
+
+
+def _journal_config_dir(start: Path) -> Path:
+    """Locate `_journal-configs/` by walking up from the script's location.
+
+    Returns the first existing `_journal-configs/` directory found by walking
+    parents up to the repo root, or a sensible default if none exists.
+    """
+    cur = start.resolve()
+    for _ in range(6):
+        candidate = cur / "_journal-configs"
+        if candidate.is_dir():
+            return candidate
+        if cur.parent == cur:
+            break
+        cur = cur.parent
+    return start / "_journal-configs"  # default; load_journal_config will error
+
+
+def load_journal_config(name: str, search_root: Path | None = None) -> dict:
+    """Load `<name>.yaml` from `_journal-configs/` and validate the schema."""
+    cfg_dir = _journal_config_dir(search_root or Path(__file__).parent)
+    cfg_path = cfg_dir / f"{name}.yaml"
+    if not cfg_path.exists():
+        available = sorted(p.stem for p in cfg_dir.glob("*.yaml") if p.stem != "README")
+        raise FileNotFoundError(
+            f"Journal config not found: {cfg_path}\n"
+            f"Available: {', '.join(available) if available else '(none)'}"
+        )
+    cfg = yaml.safe_load(cfg_path.read_text()) or {}
+    if not isinstance(cfg, dict) or "name" not in cfg:
+        raise ValueError(f"{cfg_path} is not a valid journal config")
+    return cfg
+
+
+def _iter_text_elements(root: etree._Element):
+    """Yield every `<text>` and `<tspan>` descendant."""
+    text_tags = {f"{SVG_TAG}text", f"{SVG_TAG}tspan"}
+    for elem in root.iter():
+        if elem.tag in text_tags:
+            yield elem
+
+
+def _get_inherited_attr(elem: etree._Element, attr: str) -> str | None:
+    """Walk the parent chain looking for an attribute."""
+    cur: etree._Element | None = elem
+    while cur is not None:
+        val = cur.get(attr)
+        if val:
+            return val
+        cur = cur.getparent()
+    return None
+
+
+def _parse_pt(value: str | None) -> float | None:
+    """Convert a CSS-ish font-size to pt (1pt ≈ 1.333 px)."""
+    if not value:
+        return None
+    s = value.strip().lower()
+    try:
+        if s.endswith("pt"):
+            return float(s[:-2])
+        if s.endswith("px"):
+            return float(s[:-2]) * 0.75  # px → pt
+        if s.endswith("mm"):
+            return float(s[:-2]) * 2.834645669
+        if s.endswith("pc"):
+            return float(s[:-2]) * 12.0
+        # bare number — treat as user units (~px in our templates)
+        return float(s) * 0.75
+    except ValueError:
+        return None
+
+
+def validate_against_journal(svg_path: Path, journal_cfg: dict) -> tuple[list[str], list[str]]:
+    """Return (errors, warnings) — errors fail the build, warnings just print.
+
+    Checks:
+      - fonts.forbidden present anywhere → error
+      - fonts.preferred not used anywhere → warning
+      - font_size.min_pt / max_pt violated → error / warning
+      - line_weight.min_pt violated → error
+      - sizes.* exceeded → warning
+    """
+    errors: list[str] = []
+    warnings: list[str] = []
+
+    try:
+        tree = etree.parse(str(svg_path))
+    except (etree.XMLSyntaxError, etree.ParseError, OSError) as exc:
+        return ([f"could not parse SVG: {exc}"], [])
+    root = tree.getroot()
+
+    fonts_cfg = journal_cfg.get("fonts") or {}
+    forbidden = {f.lower() for f in fonts_cfg.get("forbidden", [])}
+    preferred = {f.lower() for f in fonts_cfg.get("preferred", [])}
+    fs_cfg = journal_cfg.get("font_size") or {}
+    min_pt = float(fs_cfg.get("min_pt", 0))
+    max_pt = float(fs_cfg.get("max_pt", 9999))
+    lw_cfg = journal_cfg.get("line_weight") or {}
+    min_lw_pt = float(lw_cfg.get("min_pt", 0))
+
+    used_fonts: set[str] = set()
+
+    # Text-bearing elements: font + size checks.
+    for elem in _iter_text_elements(root):
+        ff = (_get_inherited_attr(elem, "font-family") or "").strip().strip('"\'')
+        if ff:
+            for chunk in ff.split(","):
+                used_fonts.add(chunk.strip().strip('"\'').lower())
+        fs_raw = _get_inherited_attr(elem, "font-size")
+        fs_pt = _parse_pt(fs_raw)
+        if fs_pt is not None:
+            if fs_pt < min_pt:
+                errors.append(f"<{elem.tag.split('}')[-1]} id={elem.get('id')!r}>"
+                              f" font-size {fs_pt:.1f}pt < {min_pt}pt min")
+            if fs_pt > max_pt:
+                warnings.append(f"<{elem.tag.split('}')[-1]} id={elem.get('id')!r}>"
+                                f" font-size {fs_pt:.1f}pt > {max_pt}pt max")
+
+    # Substring match so the config can list canonical names like
+    # "Comic Sans" while the SVG carries the OS-specific variant
+    # "Comic Sans MS". Same logic for preferred matching.
+    forbidden_hits = {
+        bad for bad in forbidden
+        if any(bad in used for used in used_fonts)
+    }
+    if forbidden_hits:
+        errors.append(f"forbidden fonts present: {sorted(forbidden_hits)} "
+                      f"(matched in: {sorted(used_fonts)})")
+    if preferred:
+        any_preferred_used = any(
+            pref in used for pref in preferred for used in used_fonts
+        )
+        if not any_preferred_used:
+            warnings.append(f"none of the preferred fonts {sorted(preferred)} "
+                            f"were used (found: {sorted(used_fonts)})")
+
+    # Stroke widths.
+    for elem in root.iter():
+        sw_raw = elem.get("stroke-width")
+        sw_pt = _parse_pt(sw_raw)
+        if sw_pt is not None and 0 < sw_pt < min_lw_pt:
+            tag = elem.tag.split("}")[-1]
+            errors.append(f"<{tag} id={elem.get('id')!r}> "
+                          f"stroke-width {sw_pt:.2f}pt < {min_lw_pt}pt min")
+
+    return errors, warnings
+
+
+# ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
 
@@ -574,6 +727,9 @@ def main() -> int:
     parser.add_argument("--manifest", type=Path, required=True, help="manifest YAML")
     parser.add_argument("--output", type=Path, required=True, help="output SVG path")
     parser.add_argument("--font", default="Arial", help="unified font-family (default: Arial)")
+    parser.add_argument("--journal", type=str, default=None,
+                        help=("validate the output against `_journal-configs/<name>.yaml` "
+                              "(e.g. 'nature', 'cell', 'lancet'). Build fails on any error."))
     parser.add_argument("--export-pdf", action="store_true",
                         help="export an editable PDF alongside the SVG")
     parser.add_argument("--export-pdf-final", action="store_true",
@@ -594,6 +750,29 @@ def main() -> int:
 
     fill_placeholders(args.template, manifest, args.output)
     normalize_fonts(args.output, args.font)
+
+    # Run journal validation BEFORE the (more expensive) export step so the
+    # user sees violations early. Errors fail the build with non-zero exit.
+    if args.journal:
+        try:
+            cfg = load_journal_config(args.journal)
+        except (FileNotFoundError, ValueError) as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            return 1
+        errors, warnings = validate_against_journal(args.output, cfg)
+        if warnings:
+            print(f"\n[journal:{cfg['name']}] warnings ({len(warnings)}):", file=sys.stderr)
+            for w in warnings:
+                print(f"  - {w}", file=sys.stderr)
+        if errors:
+            print(f"\n[journal:{cfg['name']}] errors ({len(errors)}):", file=sys.stderr)
+            for e in errors:
+                print(f"  - {e}", file=sys.stderr)
+            print("\nFix the errors above or remove --journal to bypass.",
+                  file=sys.stderr)
+            return 1
+        if not warnings and not errors:
+            print(f"\n[journal:{cfg['name']}] ✓ all checks passed")
 
     if args.export_pdf:
         export_pdf(

@@ -1,0 +1,26 @@
+name: The Lancet
+publisher: Elsevier
+url: https://www.thelancet.com/lancet/information-for-authors
+
+sizes:
+  single_column: { width_mm: 70,  max_height_mm: 230 }
+  double_column: { width_mm: 145, max_height_mm: 230 }
+
+fonts:
+  preferred: [Arial, Helvetica, Univers]
+  forbidden: [Comic Sans, Papyrus]
+
+font_size:
+  min_pt: 7
+  max_pt: 10
+
+line_weight:
+  min_pt: 0.5
+
+color_mode: RGB
+file_formats: [pdf, eps, tif]
+
+notes: |
+  The Lancet uses narrower columns than most journals (single 70 mm,
+  double 145 mm). Clinical figures often include a forest plot or flow
+  diagram; both should remain readable at 70 mm width. Vector preferred.
