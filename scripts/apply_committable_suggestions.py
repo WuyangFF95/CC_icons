@@ -46,7 +46,12 @@ DENY_PATHS = frozenset({
     ".github/workflows/pr-autopilot.yml",
     "scripts/pr_autopilot_dispatch.py",
     "scripts/apply_committable_suggestions.py",  # don't let suggestions edit ourselves
+    "scripts/autopilot_prompts/fix_round.md",   # nor the LLM prompt that drives Tier 1/2
 })
+
+# Whole subtree the autopilot must never rewrite via Tier 0. Keeps the
+# prompts directory tamper-proof even if a future file is added there.
+DENY_PREFIXES: tuple[str, ...] = ("scripts/autopilot_prompts/",)
 
 # `\n?` makes the trailing newline before the closing fence optional, so
 # empty / line-deletion suggestions (```suggestion\n``` with no body) match.
@@ -95,6 +100,8 @@ class Suggestion:
 
 def _is_path_allowed(path: str) -> bool:
     if path in DENY_PATHS:
+        return False
+    if any(path.startswith(prefix) for prefix in DENY_PREFIXES):
         return False
     return bool(ALLOWED_PATH_RE.match(path))
 

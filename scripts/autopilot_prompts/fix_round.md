@@ -58,7 +58,12 @@ You will be given a JSON bundle at `${BUNDLE_PATH}` containing every
    on `main` look like and what Style guide → "Bilingual commit body"
    refers to.
 
-6. **Push** to the PR branch.
+6. **Do not push.** Stop after committing locally. The autopilot
+   workflow runs a Path guard immediately after this prompt and then
+   pushes the new commits to the PR branch *only if the guard passes*.
+   Pushing from inside this step would bypass the guard — out-of-scope
+   edits would land on the PR branch with no clean way to undo the
+   remote push (`git reset --hard` only affects the local worktree).
 
 7. **Emit `/tmp/autopilot-disposition.json`** with one entry per
    thread you considered, in this shape:
@@ -79,10 +84,14 @@ You will be given a JSON bundle at `${BUNDLE_PATH}` containing every
 
 ## Hard rules
 
-- **Never** push to `main` or any branch other than the PR's head ref.
+- **Never push, period.** Commit locally and stop; the workflow's Path
+  guard step runs after you and pushes if (and only if) the diff stays
+  inside the allow-list. Pushing yourself defeats the guard.
 - **Never** force-push.
-- **Never** edit `.github/workflows/pr-autopilot.yml` itself or
-  `scripts/pr_autopilot_dispatch.py` from inside this run — that path is
+- **Never** edit `.github/workflows/pr-autopilot.yml`,
+  `scripts/pr_autopilot_dispatch.py`,
+  `scripts/apply_committable_suggestions.py`, or
+  `scripts/autopilot_prompts/**` from inside this run — those paths are
   reserved for human edits to the autopilot's own logic.
 - **Never** create new files under `_palettes/` / `_journal-configs/` /
   `templates/` — those are user-curated content directories. You may

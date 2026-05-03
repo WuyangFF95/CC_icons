@@ -79,9 +79,14 @@ jobs:
           EVENT_ISSUE_PR: ${{ github.event.issue.number }}
         run: |
           set -euo pipefail
+          # Resolve PR number; on workflow_dispatch without input it can
+          # be empty. Pass --pr only when non-empty so argparse's
+          # `type=int` doesn't crash on int(""); classify() handles
+          # `pr_number is None` cleanly by returning noop.
+          pr_arg="${PR_INPUT:-${EVENT_PR:-${EVENT_ISSUE_PR:-}}}"
           python scripts/pr_autopilot_dispatch.py classify \
               --event "$EVENT_NAME" \
-              --pr "${PR_INPUT:-${EVENT_PR:-${EVENT_ISSUE_PR:-}}}" \
+              ${pr_arg:+--pr "$pr_arg"} \
               --emit-github-output
 
   fix:
@@ -255,9 +260,12 @@ jobs:
           track_progress:     "false"
 
       # ─────────────────────────────────────────────────────────────────
-      # Path guard: revert any change Claude made outside the autopilot's
-      # allow-list before the commit lands. claude-code-action doesn't
-      # expose `allow_paths`, so we enforce it here as a post-step.
+      # Path guard: inspect what Claude committed *locally* (the prompt
+      # in scripts/autopilot_prompts/fix_round.md tells the agent NOT to
+      # push). If anything sits outside the allow-list, `git reset --hard`
+      # wipes it before the next step gets a chance to push to remote.
+      # This is the only window where reverting is safe — once a push
+      # lands on the PR branch, there's no clean undo.
       # ─────────────────────────────────────────────────────────────────
       - name: Path guard
         if: always() && steps.bundle.outputs.remaining != '0'
@@ -288,6 +296,30 @@ jobs:
             git reset --hard "$BASE_SHA"
             exit 1
           fi
+
+      # ─────────────────────────────────────────────────────────────────
+      # Push Tier 1/2 fixes: the prompt told Claude not to push, so any
+      # commits it added are still local. Push them only after the Path
+      # guard above succeeded. If `set -e` aborted the guard step, this
+      # step is skipped automatically (no `if: always()`).
+      # ─────────────────────────────────────────────────────────────────
+      - name: Push Tier 1/2 fixes (only after Path guard passed)
+        if: steps.bundle.outputs.remaining != '0' && (env.HAS_OAUTH == 'true' || env.HAS_API_KEY == 'true')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HEAD_REF: ${{ steps.prinfo.outputs.head_ref }}
+          BASE_SHA: ${{ steps.baseline.outputs.sha }}
+        run: |
+          set -euo pipefail
+          if [ "$(git rev-parse HEAD)" = "$BASE_SHA" ]; then
+            echo "No commits beyond baseline — Claude wrote no patches."
+            exit 0
+          fi
+          # Absorb anything that landed concurrently (a human pushing,
+          # or another autopilot run finishing). `--autostash` keeps our
+          # local commits safe across the rebase.
+          git pull --rebase --autostash origin "$HEAD_REF" || true
+          git push origin "HEAD:refs/heads/$HEAD_REF"
 
       - name: Reply to threads + post summary
         if: steps.bundle.outputs.remaining != '0'
