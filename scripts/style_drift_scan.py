@@ -191,8 +191,12 @@ def _collect_style_ids(library_root: Path) -> list[str]:
                 sid = r.get("style_id") or (r.get("_meta") or {}).get("style_id")
                 if sid:
                     style_ids.add(sid)
-        except (json.JSONDecodeError, OSError):
-            pass
+        except (json.JSONDecodeError, OSError) as exc:
+            # Match the YAML branch's surfacing — silent swallow would
+            # produce a "no drift" false-negative report when the index
+            # was unreadable.
+            print(f"[warn] style_drift_scan: failed to parse {json_index}: {exc}",
+                  file=sys.stderr)
     # Legacy per-category YAMLs definitely have it.
     import yaml  # local import: keeps style_drift_scan importable without yaml on the path
     for category in ("cells", "molecules", "organelles", "tissues",
@@ -333,6 +337,15 @@ def main() -> int:
         if args.references_dir
         else library_root / "_style-references"
     )
+
+    # Range check: 8x8 average-hash is 64 bits, so a threshold outside
+    # [0, 64] is meaningless. Negative values would flip the gate to
+    # "everything drifts", >64 to "nothing drifts" — both are likely
+    # typos rather than intentional.
+    if not 0 <= args.threshold_bits <= 64:
+        print(f"Error: --threshold-bits must be in [0, 64], got {args.threshold_bits}",
+              file=sys.stderr)
+        return 1
 
     if not references_dir.is_dir():
         print(f"Error: references dir not found: {references_dir}", file=sys.stderr)

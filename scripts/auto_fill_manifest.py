@@ -295,7 +295,15 @@ def main() -> int:
         print(f"Error: template not found: {args.template}", file=sys.stderr)
         return 1
 
-    placeholders, labels = parse_template(args.template)
+    try:
+        placeholders, labels = parse_template(args.template)
+    except (etree.XMLSyntaxError, etree.ParseError, OSError) as exc:
+        # Convert lxml parse failures into a stable CLI error code so
+        # callers (CI gates, downstream pipelines) get a predictable
+        # signal instead of a Python traceback.
+        print(f"Error: failed to parse template SVG {args.template}: {exc}",
+              file=sys.stderr)
+        return 1
     print(f"Template: {args.template.name}")
     print(f"  placeholders: {len(placeholders)}")
     print(f"  labels:       {len(labels)}")

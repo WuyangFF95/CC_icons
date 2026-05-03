@@ -377,13 +377,20 @@ def _pick_phylopic_source(
 
 
 def _detect_raster_ext_from_bytes(content: bytes) -> str | None:
-    """Best-effort magic-byte sniff. None if not recognized."""
+    """Best-effort magic-byte sniff. None if not recognized.
+
+    The SVG branch requires `<svg` to actually appear in the first 512
+    bytes rather than just any `<` opener — otherwise a 200-OK HTML
+    error page or some other XML doc would be saved as `.svg`, producing
+    library rows that "parse but never render" (lxml accepts them, but
+    cairosvg / assemble_figure can't do anything with them).
+    """
     if content.startswith(b"\x89PNG\r\n\x1a\n"):
         return "png"
     if content.startswith(b"\xff\xd8\xff"):
         return "jpg"
-    if content.lstrip().startswith(b"<"):
-        # SVG / XML
+    head = content[:512].lstrip().lower()
+    if b"<svg" in head:
         return "svg"
     return None
 

@@ -96,7 +96,20 @@ def load_palette(palette_path: Path | None) -> list[Color]:
     except (yaml.YAMLError, OSError) as exc:
         print(f"[error] failed to load palette {palette_path}: {exc}", file=sys.stderr)
         return []
-    raw = data.get("colors") or []
+    # Schema validation — without this, a typo like a top-level list
+    # instead of `{colors: [...]}`, or `colors: "#1B5BA0"` (a string
+    # instead of a list), silently yields an empty palette and the user
+    # wonders why nothing got snapped. Surface a clear error instead.
+    if not isinstance(data, dict):
+        print(f"[error] {palette_path}: top-level must be a mapping with a "
+              f"`colors:` list, got {type(data).__name__}", file=sys.stderr)
+        return []
+    raw = data.get("colors")
+    if not isinstance(raw, list):
+        print(f"[error] {palette_path}: `colors:` must be a list of hex "
+              f"strings, got {type(raw).__name__ if raw is not None else 'missing'}",
+              file=sys.stderr)
+        return []
     out: list[Color] = []
     for item in raw:
         c = Color.from_hex(str(item))
@@ -326,8 +339,11 @@ def walk_library(
     stats = Stats()
     src_dir = library_root / "library"
     if not src_dir.is_dir():
+        # Hard fail with a non-zero exit so a misconfigured `--library-root`
+        # in CI / batch is treated as failure rather than "successfully
+        # normalized 0 files". Caller's `main()` propagates the SystemExit.
         print(f"[error] library directory not found: {src_dir}", file=sys.stderr)
-        return stats
+        raise SystemExit(1)
 
     for svg in src_dir.rglob("*.svg"):
         stats.files_seen += 1

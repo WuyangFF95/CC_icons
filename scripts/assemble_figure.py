@@ -604,6 +604,28 @@ def load_journal_config(name: str, search_root: Path | None = None) -> dict:
     cfg = yaml.safe_load(cfg_path.read_text()) or {}
     if not isinstance(cfg, dict) or "name" not in cfg:
         raise ValueError(f"{cfg_path} is not a valid journal config")
+
+    # Numeric-field schema check — a typo like `min_pt: "8pt"` in a
+    # hand-edited YAML would otherwise crash at validation time with a
+    # confusing `float()` ValueError instead of a useful message
+    # pointing at the bad field path.
+    def _require_number(path: str, value: object) -> None:
+        if value is None:
+            return
+        try:
+            float(value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                f"{cfg_path}: `{path}` must be numeric, got {value!r}"
+            ) from exc
+
+    _require_number("font_size.min_pt", (cfg.get("font_size") or {}).get("min_pt"))
+    _require_number("font_size.max_pt", (cfg.get("font_size") or {}).get("max_pt"))
+    _require_number("line_weight.min_pt", (cfg.get("line_weight") or {}).get("min_pt"))
+    for col_name, col_cfg in (cfg.get("sizes") or {}).items():
+        if isinstance(col_cfg, dict):
+            _require_number(f"sizes.{col_name}.width_mm", col_cfg.get("width_mm"))
+            _require_number(f"sizes.{col_name}.max_height_mm", col_cfg.get("max_height_mm"))
     return cfg
 
 
@@ -768,21 +790,32 @@ def validate_against_journal(svg_path: Path, journal_cfg: dict) -> tuple[list[st
                 except ValueError:
                     pass
         if canvas_w_mm is not None and canvas_h_mm is not None:
+            # A figure is acceptable if it fits AT LEAST ONE configured
+            # column tier (single / double / page-width). Warning only
+            # fires when it overflows EVERY tier — otherwise an 18 cm
+            # double-column figure would be flagged as "exceeds 9 cm
+            # single-column" which is a false positive.
+            fits_any = False
+            tier_misses: list[str] = []
             for col_name, col_cfg in sizes_cfg.items():
                 if not isinstance(col_cfg, dict):
                     continue
                 w_max = col_cfg.get("width_mm")
                 h_max = col_cfg.get("max_height_mm")
-                if w_max and canvas_w_mm > float(w_max):
-                    warnings.append(
-                        f"canvas width {canvas_w_mm:.1f}mm > "
-                        f"{col_name}.width_mm={w_max}"
-                    )
-                if h_max and canvas_h_mm > float(h_max):
-                    warnings.append(
-                        f"canvas height {canvas_h_mm:.1f}mm > "
-                        f"{col_name}.max_height_mm={h_max}"
-                    )
+                w_ok = (w_max is None) or (canvas_w_mm <= float(w_max))
+                h_ok = (h_max is None) or (canvas_h_mm <= float(h_max))
+                if w_ok and h_ok:
+                    fits_any = True
+                    break
+                tier_misses.append(
+                    f"{col_name} ({canvas_w_mm:.1f}mm × {canvas_h_mm:.1f}mm "
+                    f"vs {w_max}mm × {h_max}mm)"
+                )
+            if not fits_any and tier_misses:
+                warnings.append(
+                    "canvas exceeds every configured size tier: "
+                    + "; ".join(tier_misses)
+                )
 
     return errors, warnings
 

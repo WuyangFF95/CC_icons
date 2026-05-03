@@ -79,11 +79,11 @@ def _heuristic_bbox(elem: etree._Element) -> Bbox | None:
         fs = float(fs_raw.replace("px", "").replace("pt", ""))
     except ValueError:
         fs = 16.0
-    text = (elem.text or "").strip()
-    if not text:
-        # may have <tspan> children — concatenate their text
-        text = "".join((c.text or "") for c in elem)
-    text = text.strip()
+    # Concatenate the entire text subtree (text + every <tspan>'s text +
+    # tail text). The previous one-level-deep walk missed common
+    # `<text><tspan>A</tspan> tail</text>` patterns that produce a real
+    # bbox on screen but read as empty here, hiding overlaps.
+    text = "".join(elem.itertext()).strip()
 
     if not text:
         return None
@@ -93,7 +93,10 @@ def _heuristic_bbox(elem: etree._Element) -> Bbox | None:
     width = max(len(text) * fs * 0.55, fs)
     height = fs * 1.2
 
-    anchor = (elem.get("text-anchor") or "start").lower()
+    # `text-anchor` inherits down the SVG tree, so a single `<g
+    # text-anchor="middle">` wrapper around several `<text>` children
+    # was previously unseen and made the heuristic mis-place each cell.
+    anchor = (_walk_inherited(elem, "text-anchor") or "start").lower()
     if anchor == "middle":
         x -= width / 2
     elif anchor == "end":
@@ -262,7 +265,14 @@ def main() -> int:
               file=sys.stderr)
 
     if args.render_overlay:
-        render_overlay(args.svg, args.render_overlay, overlaps, pairs)
+        try:
+            render_overlay(args.svg, args.render_overlay, overlaps, pairs)
+        except OSError as exc:
+            # Same CI-friendly contract as the parse-failure branch
+            # above: never let a write failure dump a traceback.
+            print(f"Error: failed to write overlay {args.render_overlay}: {exc}",
+                  file=sys.stderr)
+            return 2
         print(f"\nOverlay written to: {args.render_overlay}", file=sys.stderr)
 
     return 1  # non-zero so CI can gate on it
