@@ -479,12 +479,19 @@ def ingest_nih_bioart_zip(target_root: Path, zip_path: Path) -> list[dict]:
             print(f"  Found {len(members)} usable files in {zip_path.name}")
             for entry in tqdm(members, desc="  Extracting", unit="file"):
                 ext = entry.rsplit(".", 1)[-1].lower()
+                # Slugify the full ZIP-relative path (sans extension) so two
+                # members sharing a stem under different directories don't
+                # silently overwrite each other on disk while merge_index
+                # keeps only the first record's metadata. Same pattern as
+                # download_bioicons / download_reactome.
+                relpath_sans_ext = str(Path(entry).with_suffix(""))
+                item_slug = slugify(relpath_sans_ext.replace("/", "-"))
                 stem = Path(entry).stem
-                target_path = target_subdir / f"nihbioart-{slugify(stem)}.{ext}"
+                target_path = target_subdir / f"nihbioart-{item_slug}.{ext}"
                 with zf.open(entry) as src, open(target_path, "wb") as dst:
                     dst.write(src.read())
                 rec = make_record(
-                    "nih_bioart", slugify(stem), stem.replace("_", " "), [],
+                    "nih_bioart", item_slug, stem.replace("_", " "), [],
                     file_relpath=str(target_path.relative_to(library_dir)),
                 )
                 records.append(rec)
@@ -608,10 +615,16 @@ def download_scidraw(target_root: Path, max_count: int | None = None) -> list[di
                 file_resp = requests.get(file_url, timeout=20)
                 if file_resp.status_code != 200:
                     continue
-                target_path = target_subdir / f"scidraw-{slugify(title)}.svg"
+                # SciDraw URLs are of the form /drawings/<id>; pages can
+                # share an h1 title (different artists, same subject), so
+                # slug-by-title alone collides on disk. Append the URL's
+                # drawing id as a stable unique suffix.
+                drawing_id = url.rstrip("/").rsplit("/", 1)[-1]
+                item_slug = slugify(f"{title}-{drawing_id}")
+                target_path = target_subdir / f"scidraw-{item_slug}.svg"
                 target_path.write_bytes(file_resp.content)
                 rec = make_record(
-                    "scidraw", slugify(title), title, ["neuroscience"],
+                    "scidraw", item_slug, title, ["neuroscience"],
                     file_relpath=str(target_path.relative_to(library_dir)),
                 )
                 records.append(rec)
@@ -651,12 +664,17 @@ def extract_servier_pptx(target_root: Path, pptx_path: Path) -> list[dict]:
                 ext = entry.rsplit(".", 1)[-1].lower()
                 if ext not in ("emf", "wmf", "png", "svg", "jpg", "jpeg"):
                     continue
+                # Same fix as ingest_nih_bioart_zip — distinct PPTX media
+                # entries with the same stem under different ppt/media/
+                # subpaths shouldn't collide on disk and lose metadata.
+                relpath_sans_ext = str(Path(entry).with_suffix(""))
+                item_slug = slugify(relpath_sans_ext.replace("/", "-"))
                 stem = Path(entry).stem
-                target_path = target_subdir / f"servier-{slugify(stem)}.{ext}"
+                target_path = target_subdir / f"servier-{item_slug}.{ext}"
                 with zf.open(entry) as src, open(target_path, "wb") as dst:
                     dst.write(src.read())
                 rec = make_record(
-                    "servier", slugify(stem), stem.replace("_", " "), [],
+                    "servier", item_slug, stem.replace("_", " "), [],
                     file_relpath=str(target_path.relative_to(library_dir)),
                 )
                 records.append(rec)

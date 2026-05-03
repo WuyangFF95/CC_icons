@@ -211,10 +211,18 @@ def _namespace_subtree_ids(wrapper: etree._Element, prefix: str) -> None:
     its `<defs>` / `<clipPath>` / `<mask>` / `<linearGradient>` etc. produces
     duplicate `id`s and `url(#xxx)` references that bind to whichever copy XML
     visits first — wrong renders, broken selectors. We rewrite both sides.
+
+    The wrapper element itself is skipped: its id was set to `prefix` by the
+    caller, and re-prefixing would produce e.g. `panel-a-1-panel-a-1`, breaking
+    every downstream `dom_set` selector that targets panels by their expected
+    id.
     """
     # 1) Collect ids and rewrite the id attribute itself.
+    #    Skip the wrapper itself (its id is the caller-supplied prefix).
     id_map: dict[str, str] = {}
     for elem in wrapper.iter():
+        if elem is wrapper:
+            continue
         old_id = elem.get("id")
         if old_id:
             new_id = f"{prefix}-{old_id}"
@@ -399,13 +407,20 @@ def fill_placeholders(template_path: Path, manifest: dict, output_path: Path) ->
         # raise ValueError on `float("1600,")`. Use a comma+whitespace regex.
         viewbox_raw = (root.get("viewBox") or "0 0 1600 1000").strip()
         viewbox = [v for v in re.split(r"[\s,]+", viewbox_raw) if v]
+        # viewBox = "min-x min-y width height". Bottom-right is at
+        # (min-x + width, min-y + height); not (width, height) when origin
+        # is non-zero. Templates with a translated origin (e.g.
+        # `viewBox="100 200 1600 1000"`) would otherwise place the
+        # caption inside the visible area but offset from the corner.
+        origin_x = float(viewbox[0]) if len(viewbox) >= 4 else 0.0
+        origin_y = float(viewbox[1]) if len(viewbox) >= 4 else 0.0
         canvas_w = float(viewbox[2]) if len(viewbox) >= 4 else 1600.0
         canvas_h = float(viewbox[3]) if len(viewbox) >= 4 else 1000.0
         attr_node = etree.SubElement(
             root, f"{SVG_TAG}text",
             attrib={
-                "x": str(canvas_w - 10),
-                "y": str(canvas_h - 5),
+                "x": str(origin_x + canvas_w - 10),
+                "y": str(origin_y + canvas_h - 5),
                 "text-anchor": "end",
                 "font-size": "8",
                 "fill": "#888",
