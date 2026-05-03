@@ -540,6 +540,10 @@ def cmd_stats(args: argparse.Namespace) -> int:
     by_source = Counter(r.get("source", "?") for r in records)
     by_category = Counter(r.get("category", "?") for r in records)
     by_license = Counter(r.get("license", "?") for r in records)
+    # Format defaults to "vector" for legacy rows that pre-date the
+    # PhyloPic raster-fallback path (see #11). Records explicitly tagged
+    # by download_phylopic carry their real "vector" / "raster" value.
+    by_format = Counter(r.get("format", "vector") for r in records)
 
     print(f"\n{'=' * 60}")
     print(f"Library Stats  (root: {LIBRARY_ROOT})")
@@ -557,6 +561,10 @@ def cmd_stats(args: argparse.Namespace) -> int:
     print("\nBy license:")
     for lic, n in by_license.most_common():
         print(f"  {lic:25s} {n:>6d}")
+
+    print("\nBy format (vector vs raster):")
+    for fmt, n in by_format.most_common():
+        print(f"  {fmt:25s} {n:>6d}")
 
     attr_required = sum(1 for r in records if r.get("attribution_required"))
     print(f"\nAttribution required: {attr_required} elements")

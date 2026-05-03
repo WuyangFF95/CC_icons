@@ -319,8 +319,89 @@ def _phylopic_build_id(api_root: str) -> int:
     return 0  # Many endpoints accept build=0 by 302-redirecting to current.
 
 
-def download_phylopic(target_root: Path, max_count: int | None = None) -> list[dict]:
-    """Page through PhyloPic v2 /images and ingest each silhouette."""
+def _pick_phylopic_source(
+    links: dict,
+    *,
+    allow_raster: bool,
+) -> tuple[str | None, str, str]:
+    """Choose the best download source for one PhyloPic item.
+
+    Returns (href, format, ext) or (None, "", "") if nothing usable was found.
+    `format` is "vector" or "raster"; `ext` is the file extension to save with.
+
+    Priority:
+      1. `vectorFile` if its type indicates SVG (always preferred).
+      2. If `allow_raster`, fall back to `rasterFiles` largest entry, then
+         `sourceFile` if its type is image/png|jpeg. Skip silently otherwise.
+    """
+    vf = links.get("vectorFile") or {}
+    vf_href = vf.get("href")
+    vf_type = (vf.get("type") or "").lower()
+    if vf_href and "svg" in vf_type:
+        return vf_href, "vector", "svg"
+
+    if not allow_raster:
+        return None, "", ""
+
+    # rasterFiles is a list; pick the largest by parsing the "WxH" sizes label.
+    rasters = links.get("rasterFiles") or []
+    best = None
+    best_pixels = -1
+    for r in rasters:
+        sizes = r.get("sizes") or ""  # e.g. "1024x768"
+        try:
+            w_str, h_str = sizes.lower().split("x", 1)
+            pixels = int(w_str) * int(h_str)
+        except (ValueError, AttributeError):
+            pixels = 0
+        if pixels > best_pixels and r.get("href"):
+            best = r
+            best_pixels = pixels
+    if best:
+        ext = "jpg" if "jpeg" in (best.get("type") or "").lower() else "png"
+        return best["href"], "raster", ext
+
+    # sourceFile last — only accept it when we can identify the type.
+    sf = links.get("sourceFile") or {}
+    sf_href = sf.get("href")
+    sf_type = (sf.get("type") or "").lower()
+    if sf_href:
+        if "png" in sf_type:
+            return sf_href, "raster", "png"
+        if "jpeg" in sf_type or "jpg" in sf_type:
+            return sf_href, "raster", "jpg"
+        if "svg" in sf_type:
+            return sf_href, "vector", "svg"
+
+    return None, "", ""
+
+
+def _detect_raster_ext_from_bytes(content: bytes) -> str | None:
+    """Best-effort magic-byte sniff. None if not recognized."""
+    if content.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "png"
+    if content.startswith(b"\xff\xd8\xff"):
+        return "jpg"
+    if content.lstrip().startswith(b"<"):
+        # SVG / XML
+        return "svg"
+    return None
+
+
+def download_phylopic(
+    target_root: Path,
+    max_count: int | None = None,
+    *,
+    allow_raster: bool = False,
+) -> list[dict]:
+    """Page through PhyloPic v2 /images and ingest each silhouette.
+
+    By default vector-only (the library is SVG-first). When `allow_raster`
+    is True, items lacking an SVG vectorFile fall back to the largest
+    rasterFiles entry (then sourceFile), saved with the correct extension
+    based on Content-Type + magic-byte sniff. Each record carries a
+    `format: "vector" | "raster"` field so downstream tools can branch.
+    """
     print("\n[2/6] Downloading PhyloPic (CC0/CC-BY)...")
     src_meta = SOURCES_META["phylopic"]
     api = src_meta["api"]
@@ -387,15 +468,8 @@ def download_phylopic(target_root: Path, max_count: int | None = None) -> list[d
             seen_ids.add(uuid)
 
             links = item.get("_links") or {}
-            # Only ingest from `vectorFile`. `sourceFile` may be a raster
-            # (PNG/JPEG) which would silently corrupt downstream tooling
-            # (etree.parse, cairosvg) when saved with a `.svg` extension.
-            # The library is SVG-only by design; raster fallbacks belong in
-            # a separate ingestion path.
-            vf = links.get("vectorFile") or {}
-            href = vf.get("href")
-            vf_type = (vf.get("type") or "").lower()
-            if not href or "svg" not in vf_type:
+            href, fmt, ext = _pick_phylopic_source(links, allow_raster=allow_raster)
+            if not href:
                 continue
 
             specific_node = links.get("specificNode") or {}
@@ -418,9 +492,17 @@ def download_phylopic(target_root: Path, max_count: int | None = None) -> list[d
                 file_resp = requests.get(href, timeout=20)
                 if file_resp.status_code != 200:
                     continue
-                target_path = target_subdir / f"phylopic-{uuid_short}-{slugify(name)}.svg"
+                # Sanity-check the actual bytes match the chosen extension —
+                # a sourceFile mis-typed as PNG that's actually SVG (or vice
+                # versa) could otherwise corrupt the on-disk format. Magic
+                # sniff overrides the planned ext if the two disagree.
+                sniffed = _detect_raster_ext_from_bytes(file_resp.content[:64])
+                if sniffed and sniffed != ext:
+                    ext = sniffed
+                    fmt = "vector" if sniffed == "svg" else "raster"
+                target_path = target_subdir / f"phylopic-{uuid_short}-{slugify(name)}.{ext}"
                 target_path.write_bytes(file_resp.content)
-            except Exception:
+            except (OSError, requests.exceptions.RequestException):
                 continue
 
             rec = make_record(
@@ -429,7 +511,10 @@ def download_phylopic(target_root: Path, max_count: int | None = None) -> list[d
                 license_override=license_short,
                 attribution_override=attribution,
             )
-            records.append(rec)
+            # Tag the record so downstream tools can branch on raster vs
+            # vector (e.g. assemble_figure.py uses <image> for raster, the
+            # SVG-merge path for vector).
+            rec["format"] = fmt
             pbar.update(1)
             time.sleep(0.05)  # be polite
 
@@ -782,6 +867,15 @@ def build_parser() -> argparse.ArgumentParser:
                         help="NIH BioArt ZIP path (only with --source nih_bioart)")
     parser.add_argument("--summary-only", action="store_true",
                         help="Print library stats without downloading")
+    parser.add_argument(
+        "--phylopic-allow-raster", action="store_true",
+        help=("PhyloPic only: when an item lacks an SVG vectorFile, fall back "
+              "to the largest rasterFiles entry (or sourceFile). Off by default — "
+              "the library is SVG-first and downstream tools (cairosvg, "
+              "assemble_figure SVG-merge) only support SVG. With this flag, "
+              "raster items are saved with the correct extension and tagged "
+              "format=raster so downstream tools can branch."),
+    )
     return parser
 
 
@@ -821,7 +915,10 @@ def main() -> int:
             if s == "bioicons":
                 new = download_bioicons(target_root)
             elif s == "phylopic":
-                new = download_phylopic(target_root, args.max_per_source)
+                new = download_phylopic(
+                    target_root, args.max_per_source,
+                    allow_raster=args.phylopic_allow_raster,
+                )
             elif s == "nih_bioart":
                 if not args.zip:
                     print("\n[3/6] NIH BioArt requires --zip <path> (site is a SPA, no scrape).")
