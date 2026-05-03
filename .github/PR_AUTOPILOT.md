@@ -43,11 +43,33 @@ committable suggestion 的项。没有 suggestion 的项保持未处理，留给
 
 ### How to get a Claude Max OAuth token
 
+You don't need a separate setup. Two options, both official (per
+[anthropics/claude-code-action setup docs](https://github.com/anthropics/claude-code-action/blob/main/docs/setup.md)):
+
+**Option A — guided wizard (recommended)**
+
 ```bash
-# Inside an authenticated Claude Code session:
-claude print-oauth-token     # or however the CLI exposes it; check `claude --help`
-gh secret set CLAUDE_CODE_OAUTH_TOKEN -b "<paste>"
+# Open Claude Code with your Max-authenticated session, then:
+/install-github-app
 ```
+
+This installs the Claude GitHub app on the repo, creates
+`CLAUDE_CODE_OAUTH_TOKEN` as a repo secret, and wires the workflow
+permissions in one go. Requires repo-admin on the target repo.
+
+**Option B — manual `claude setup-token`**
+
+```bash
+# Anywhere with `claude` (Pro/Max) on PATH:
+claude setup-token
+# Copy the printed token, then in any shell with `gh` authenticated:
+gh secret set CLAUDE_CODE_OAUTH_TOKEN \
+    --repo WuyangFF95/CC_icons -b "<paste-token-here>"
+```
+
+The shell you run `gh secret set` in doesn't matter — it's a
+GitHub-server-side store, not a local environment variable. macOS
+`/Users/...`, Linux `/home/...`, GitHub Codespaces, anywhere works.
 
 The OAuth token is bound to your Max account and has no separate
 billing — it consumes the same quota you already pay for, with the
