@@ -11,10 +11,14 @@ __pycache__/
 .ruff_cache/
 
 # Local library scratch
-~/sci-illustration-library/
+# (Git does NOT expand ~ in patterns; keep just the repo-relative form so
+# contributors aren't misled by a no-op `~/sci-illustration-library/` rule.)
 sci-illustration-library/
 
 # Editor
 .DS_Store
 .idea/
 .vscode/
+
+# Claude Code session metadata (per-workspace)
+.claude/
