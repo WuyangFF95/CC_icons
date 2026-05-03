@@ -587,8 +587,140 @@ def _filter_for_grid(args: argparse.Namespace, records: list[dict]) -> list[dict
     return matches[: args.max]
 
 
+def _thumb_data_uri(svg_path: Path, cell: int) -> tuple[str | None, str | None]:
+    """Return (data_uri, error_label) for a single asset thumbnail.
+
+    `data_uri` is a `data:image/...;base64,...` string ready to drop into
+    an `<img src=>`; None when rendering failed and the caller should
+    show `error_label` instead.
+    """
+    import base64
+    ext = svg_path.suffix.lower()
+    try:
+        if ext == ".svg":
+            if not HAS_CAIROSVG:
+                return None, "cairosvg missing"
+            png_bytes = cairosvg.svg2png(
+                url=str(svg_path),
+                output_width=cell,
+                output_height=cell,
+            )
+            return f"data:image/png;base64,{base64.b64encode(png_bytes).decode()}", None
+        if ext in (".png", ".jpg", ".jpeg"):
+            img = Image.open(svg_path).convert("RGB")
+            img.thumbnail((cell, cell))
+            buf = BytesIO()
+            img.save(buf, format="PNG")
+            return f"data:image/png;base64,{base64.b64encode(buf.getvalue()).decode()}", None
+        return None, f"unsupported {ext}"
+    except _RENDER_EXCEPTIONS as exc:
+        return None, f"render fail: {type(exc).__name__}"
+
+
+def _render_html_grid(
+    matches: list[dict],
+    *,
+    cell: int,
+    cols: int,
+    out_path: Path,
+) -> None:
+    """Write a self-contained interactive HTML thumbnail grid.
+
+    Each cell is `<a href="file://…asset" download>` so clicking initiates a
+    download in any browser. Thumbnails are embedded as base64 data-URIs so
+    the HTML file is portable (no dependent thumbnail directory).
+    """
+    import html as _html_lib
+
+    cells_html: list[str] = []
+    for r in matches:
+        svg_path = resolve_svg_path(r)
+        if not svg_path.exists():
+            thumb_html = (
+                f'<div class="missing" style="width:{cell}px;height:{cell}px;">'
+                f'missing</div>'
+            )
+        else:
+            data_uri, err = _thumb_data_uri(svg_path, cell)
+            if data_uri:
+                thumb_html = (
+                    f'<img src="{data_uri}" alt="{_html_lib.escape(r.get("name",""))}" '
+                    f'width="{cell}" height="{cell}">'
+                )
+            else:
+                thumb_html = (
+                    f'<div class="error" style="width:{cell}px;height:{cell}px;">'
+                    f'{_html_lib.escape(err or "render fail")}</div>'
+                )
+
+        # download link points at the actual on-disk path so clicking initiates
+        # a download in the browser. We use file:// rather than relative path so
+        # the HTML works regardless of where it's saved.
+        download_url = svg_path.resolve().as_uri()
+        attr_flag = (
+            ' <span class="attr">[ATTR]</span>'
+            if r.get("attribution_required") else ""
+        )
+        cells_html.append(
+            f'<figure class="cell">'
+            f'  <a href="{_html_lib.escape(download_url)}" download>'
+            f'    {thumb_html}'
+            f'  </a>'
+            f'  <figcaption>'
+            f'    <span class="name">{_html_lib.escape(r.get("name",""))}</span>'
+            f'    <span class="meta">{_html_lib.escape(r.get("source",""))} '
+            f'| {_html_lib.escape((r.get("license") or "")[:14])}{attr_flag}</span>'
+            f'    <span class="id">{_html_lib.escape(r["id"])}</span>'
+            f'  </figcaption>'
+            f'</figure>'
+        )
+
+    html_doc = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>library preview ({len(matches)} elements)</title>
+<style>
+  body {{ font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+          margin: 1.5rem; background: #fafafa; color: #222; }}
+  h1 {{ font-size: 1rem; font-weight: 600; margin: 0 0 1rem; color: #555; }}
+  .grid {{ display: grid;
+           grid-template-columns: repeat({cols}, 1fr);
+           gap: 14px; }}
+  .cell {{ margin: 0; padding: 8px; background: white;
+           border: 1px solid #e0e0e0; border-radius: 6px;
+           transition: box-shadow .15s ease; }}
+  .cell:hover {{ box-shadow: 0 2px 10px rgba(0,0,0,0.08); border-color: #888; }}
+  .cell a {{ display: block; text-decoration: none; }}
+  .cell img {{ display: block; margin: 0 auto; background: #fff;
+               cursor: pointer; }}
+  .cell .missing, .cell .error {{
+    display: flex; align-items: center; justify-content: center;
+    background: #fff7f3; color: #a32d2d; font-size: 0.75rem;
+    border: 1px dashed #d4796b; }}
+  figcaption {{ display: flex; flex-direction: column;
+                font-size: 0.7rem; line-height: 1.3; margin-top: 6px;
+                color: #444; word-break: break-word; }}
+  .name {{ font-weight: 600; color: #222; }}
+  .meta {{ color: #666; font-size: 0.65rem; }}
+  .attr {{ color: #c8a431; font-weight: 700; }}
+  .id   {{ color: #999; font-size: 0.6rem; font-family: ui-monospace, monospace; }}
+</style>
+</head>
+<body>
+<h1>library preview · {len(matches)} elements · click any thumbnail to download the source file</h1>
+<div class="grid">
+{chr(10).join(cells_html)}
+</div>
+</body>
+</html>
+"""
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text(html_doc, encoding="utf-8")
+
+
 def cmd_preview(args: argparse.Namespace) -> int:
-    """Render a thumbnail grid of matched elements as a single PNG."""
+    """Render a thumbnail grid of matched elements as PNG or interactive HTML."""
     if not HAS_PILLOW:
         print("Error: cmd preview requires `Pillow` (always) and `cairosvg` "
               "(when any asset is SVG)", file=sys.stderr)
@@ -598,6 +730,16 @@ def cmd_preview(args: argparse.Namespace) -> int:
     matches = _filter_for_grid(args, load_unified_index())
     if not matches:
         print("No matches to preview.")
+        return 0
+
+    # `--html out.html` mode: produce a self-contained interactive HTML
+    # grid with embedded data-URI thumbnails and click-to-download links.
+    if args.html:
+        out = Path(args.html).expanduser()
+        print(f"Rendering {len(matches)} thumbnails to HTML grid ({args.cols} cols)...")
+        _render_html_grid(matches, cell=args.cell_size, cols=args.cols, out_path=out)
+        print(f"Saved HTML preview: {out}")
+        print(f"Open with: open {out}  (or: file://{out.resolve()})")
         return 0
 
     cell = args.cell_size
@@ -920,7 +1062,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_prev.add_argument("--max", type=int, default=64, help="max elements (default 64 = 8x8)")
     p_prev.add_argument("--cols", type=int, default=8)
     p_prev.add_argument("--cell-size", type=int, default=120, help="thumbnail edge px")
-    p_prev.add_argument("--output", "-o", default="./preview.png")
+    p_prev.add_argument("--output", "-o", default="./preview.png",
+                        help="PNG output path (default mode)")
+    p_prev.add_argument("--html", default=None,
+                        help=("instead of a PNG, write a self-contained interactive "
+                              "HTML grid to this path; clicking a thumbnail downloads "
+                              "the underlying SVG/PNG asset"))
 
     p_export = sub.add_parser("export", help="bundle elements into a PPTX")
     p_export.add_argument("--ids", help="comma-separated IDs")
