@@ -20,13 +20,18 @@ You will be given a JSON bundle at `${BUNDLE_PATH}` containing every
    read the full file each one references before editing.
 
 3. **Apply the minimum diff that fixes every actionable item.**
-   - For each thread, decide:
-     - **fix**: the issue is real → write the patch
-     - **acknowledge-only**: it's out-of-scope or a future-feature request
-       → skip the code, leave a per-thread reply explaining why
-   - Stick within the workflow's `allow_paths` (scripts/, _journal-configs/,
-     _palettes/, templates/, SKILL.md, README.md, .github/workflows/).
-   - Do NOT touch tests, CI configs, or unrelated files.
+   - For each thread, classify it as one of:
+     - **`fix`**: the issue is real and you can write the patch.
+     - **`ack`**: out-of-scope, future feature, false-positive, or
+       intentional design choice — write a per-thread reply
+       explaining the reasoning, but do not touch code.
+     - **`skip`**: you genuinely don't know how to fix it. The
+       autopilot will leave the thread alone so the next review pass
+       (or a human) can guide it. Do not post a reply for `skip`.
+   - Touch only files under: `scripts/**`, `_journal-configs/**`,
+     `_palettes/**`, `templates/**`, `SKILL.md`, `README.md`, and
+     `.github/workflows/` — but **never** `pr-autopilot.yml` itself.
+     Tests and unrelated files are off-limits.
    - Prefer the suggestion in CR's `<details><summary>建议修复</summary>`
      block when present — that's an authoritative hint.
 
@@ -47,7 +52,22 @@ You will be given a JSON bundle at `${BUNDLE_PATH}` containing every
 
 6. **Push** to the PR branch.
 
-7. **Stop.** Do not reply to threads here — that's the next workflow step.
+7. **Emit `/tmp/autopilot-disposition.json`** with one entry per
+   thread you considered, in this shape:
+   ```json
+   {
+     "<thread_id_as_string>": {
+       "kind": "fix" | "ack" | "skip",
+       "reply": "<bilingual reply body, or empty for skip>"
+     },
+     ...
+   }
+   ```
+   The reply step reads this file. Threads omitted from the file
+   default to `skip` (no reply posted), so omission is the safe
+   choice when in doubt.
+
+8. **Stop.** Do not reply to threads here — that's the next workflow step.
 
 ## Hard rules
 

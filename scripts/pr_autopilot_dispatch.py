@@ -227,27 +227,73 @@ def prepare_bundle(pr_number: int, output: Path) -> dict:
 # ---------------------------------------------------------------------------
 
 
-def reply_and_summarize(pr_number: int, bundle_path: Path, commit_sha: str) -> None:
+def reply_and_summarize(
+    pr_number: int,
+    bundle_path: Path,
+    commit_sha: str,
+    disposition_path: Path | None = None,
+) -> None:
+    """Reply per-thread according to a machine-readable disposition map.
+
+    The disposition file is written by the fix step (the LLM) and
+    contains one entry per thread it considered:
+
+      {
+        "<thread_id>": {
+          "kind": "fix" | "ack" | "skip",
+          "reply": "<bilingual reply body>"
+        },
+        ...
+      }
+
+    - `kind=fix`  → post the reply (typically referencing `commit_sha`).
+                    Thread is now considered addressed.
+    - `kind=ack`  → post the reply explaining why we acknowledged
+                    without code change (out-of-scope, future work).
+                    Thread is considered addressed.
+    - `kind=skip` → DO NOT POST anything. The thread stays unaddressed
+                    so the next round of review surfaces it again
+                    (matches `fix_round.md`'s "leave it alone if you
+                    don't know how to fix it" rule).
+
+    Threads not present in the disposition map default to `skip` —
+    safer than blanket "Addressed" replies that silently bury reviews.
+    """
     bundle = json.loads(bundle_path.read_text())
     threads = bundle.get("threads", [])
     if not threads:
         print("No threads in bundle; nothing to reply to.")
         return
 
-    # Per-thread bilingual ack pointing at the fix commit.
+    dispositions: dict[str, dict] = {}
+    if disposition_path is not None and disposition_path.exists():
+        try:
+            dispositions = json.loads(disposition_path.read_text())
+        except json.JSONDecodeError as exc:
+            print(f"[warn] disposition file unparseable, falling back to "
+                  f"skip-all: {exc}", file=sys.stderr)
+            dispositions = {}
+
+    fixed = 0
+    acked = 0
+    skipped = 0
     for t in threads:
-        body = (
-            f"Addressed in `{commit_sha}` by PR Autopilot.\n\n"
-            f"已在 `{commit_sha}` 由 PR Autopilot 处理。\n\n"
-            f"<sub>auto-generated reply · "
-            f"see commit body / file diff for the specific change</sub>"
-        )
+        d = dispositions.get(str(t["id"])) or {}
+        kind = d.get("kind", "skip")
+        if kind == "skip":
+            skipped += 1
+            continue
+        body = d.get("reply") or _default_reply(kind, commit_sha)
         try:
             _gh([
                 "api", "-X", "POST",
                 f"repos/{_repo()}/pulls/{pr_number}/comments/{t['id']}/replies",
                 "-f", f"body={body}",
             ])
+            if kind == "fix":
+                fixed += 1
+            else:
+                acked += 1
         except subprocess.CalledProcessError as exc:
             print(f"[warn] failed to reply to thread {t['id']}: {exc.stderr}",
                   file=sys.stderr)
@@ -255,16 +301,33 @@ def reply_and_summarize(pr_number: int, bundle_path: Path, commit_sha: str) -> N
     # Top-level summary.
     summary = (
         f"## 🤖 PR Autopilot · round addressed in `{commit_sha}`\n\n"
-        f"{len(threads)} unaddressed review thread(s) handled in this round.\n"
-        f"{len(threads)} 条未处理评审 thread 在本轮处理。\n\n"
-        f"<sub>The autopilot will now wait for the next review pass; if "
+        f"- **fixed**: {fixed}\n"
+        f"- **acknowledged (no code change)**: {acked}\n"
+        f"- **skipped (will re-surface next review pass)**: {skipped}\n\n"
+        f"修复 {fixed} · 致谢未改 {acked} · 暂搁 {skipped}\n\n"
+        f"<sub>The autopilot will wait for the next review pass; if "
         f"`reviewDecision` flips to APPROVED + MERGEABLE, the next workflow "
-        f"run will squash-merge this PR.</sub>"
+        f"run will squash-merge this PR. Skipped threads remain "
+        f"unaddressed on purpose so review attention isn't silently buried.</sub>"
     )
     try:
         _gh(["pr", "comment", str(pr_number), "--body", summary])
     except subprocess.CalledProcessError as exc:
         print(f"[warn] failed to post summary: {exc.stderr}", file=sys.stderr)
+
+
+def _default_reply(kind: str, commit_sha: str) -> str:
+    """Fallback reply body when the LLM disposition doesn't specify one."""
+    if kind == "fix":
+        return (
+            f"Addressed in `{commit_sha}` by PR Autopilot.\n\n"
+            f"已在 `{commit_sha}` 由 PR Autopilot 处理。"
+        )
+    return (
+        f"Acknowledged by PR Autopilot — no code change in this round. "
+        f"See commit `{commit_sha}` for context.\n\n"
+        f"PR Autopilot 致谢，本轮无代码改动。详见提交 `{commit_sha}`。"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -313,6 +376,10 @@ def main() -> int:
     p_reply.add_argument("--pr", type=int, required=True)
     p_reply.add_argument("--bundle", type=Path, required=True)
     p_reply.add_argument("--commit-sha", required=True)
+    p_reply.add_argument("--disposition-file", type=Path, default=None,
+                         help="JSON map { '<thread_id>': {kind, reply} } "
+                              "produced by the fix step. Threads not listed "
+                              "default to skip (no reply posted).")
 
     args = parser.parse_args()
 
@@ -329,7 +396,10 @@ def main() -> int:
         return 0
 
     if args.cmd == "reply-and-summarize":
-        reply_and_summarize(args.pr, args.bundle, args.commit_sha)
+        reply_and_summarize(
+            args.pr, args.bundle, args.commit_sha,
+            disposition_path=args.disposition_file,
+        )
         return 0
 
     parser.error(f"unknown subcommand: {args.cmd}")

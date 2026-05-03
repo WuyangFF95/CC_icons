@@ -6,8 +6,52 @@ items): read review comments → fix code → reply per-thread → wait for
 re-review → repeat → squash-merge once `reviewDecision == APPROVED` AND
 `mergeable == MERGEABLE`.
 
-> **Status**: shipped in v0.1.3 PR#13. Disabled by default until
-> `ANTHROPIC_API_KEY` is added to repo secrets — workflow no-ops without it.
+> **Status**: shipped in v0.1.3 PR#13. Three cost tiers — pick the one
+> you want; the cheapest is always free.
+
+## Cost tiers / 成本档位
+
+The workflow runs in stages and **only escalates to a paid tier when
+the cheaper tier didn't fully clear the round**. Configure as many
+tiers as you want enabled.
+
+工作流分档运行，**仅当便宜档没清完时才升档到收费档**。配多少档由你。
+
+| Tier | Marginal cost | Setup | Coverage |
+|---|---:|---|---|
+| **0 · `apply_committable_suggestions.py`** | **$0** | None — runs always | CR / GitHub-native ```suggestion``` blocks (~50–80 % of round-1) |
+| **1 · Claude Max OAuth** | **$0** if you already pay Max | `gh secret set CLAUDE_CODE_OAUTH_TOKEN` (extracted from `claude` CLI) | the residue Tier 0 didn't cover |
+| **2 · Anthropic API key** | $0.5–$2 / round | `gh secret set ANTHROPIC_API_KEY` | same as Tier 1, pay-per-call |
+
+If you have **none** of the secrets configured, Tier 0 still runs and
+fixes whatever CR shipped a committable suggestion for. Anything
+without a suggestion stays unaddressed for a human (or a future
+configured tier) to handle.
+
+未配置任何 secret 时，Tier 0 仍然运行并修复所有 CR 给了
+committable suggestion 的项。没有 suggestion 的项保持未处理，留给
+人工或后续配置的高档处理。
+
+### Recommended setup
+
+- **You pay for Claude Max** → set `CLAUDE_CODE_OAUTH_TOKEN` only.
+  Marginal cost = $0; no per-API-call billing.
+- **You don't pay for Max** → leave Tier 1 unconfigured; Tier 0 alone
+  is free and clears most round-1 work; only set
+  `ANTHROPIC_API_KEY` when you decide a particular PR is worth the
+  $0.5–$2 escalation.
+
+### How to get a Claude Max OAuth token
+
+```bash
+# Inside an authenticated Claude Code session:
+claude print-oauth-token     # or however the CLI exposes it; check `claude --help`
+gh secret set CLAUDE_CODE_OAUTH_TOKEN -b "<paste>"
+```
+
+The OAuth token is bound to your Max account and has no separate
+billing — it consumes the same quota you already pay for, with the
+same fair-use limits.
 
 PR Autopilot 自动化我（@WuyangFF95）在 PR#1（6 轮 35 评审项）和 PR#12（2
 轮 28 评审项）手动跑的同一个循环：读评审 → 改代码 → 逐 thread 双语回复
