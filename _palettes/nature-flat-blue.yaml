@@ -1,0 +1,15 @@
+name: Nature Flat Blue
+notes: |
+  Cool blue-only palette for Nature-style schematics. Pair with
+  `--font Arial` and `--journal nature` in assemble_figure.py.
+colors:
+  - "#0D3B73"
+  - "#1B5BA0"
+  - "#2E7CD6"
+  - "#5DA0E6"
+  - "#A6CFF2"
+  - "#E1EDFA"
+  - "#F2F8FD"
+  - "#FFFFFF"
+  - "#333333"
+  - "#888888"

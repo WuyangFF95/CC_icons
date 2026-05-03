@@ -1,0 +1,29 @@
+name: Dark Proteome (4-panel mixed)
+notes: |
+  The native palette of `templates/dark_proteome_4panel_template.svg`.
+  4 panel themes (blue / green / gray / purple) + neutrals + a single
+  red highlight for "high-impact" callouts.
+colors:
+  # Panel A — blue
+  - "#2E7CD6"
+  - "#1B5BA0"
+  - "#F2F8FD"
+  # Panel B — green
+  - "#4FA85F"
+  - "#2E7B3D"
+  - "#F2FAF4"
+  # Panel C — gray
+  - "#888888"
+  - "#5F5E5A"
+  - "#F8F8F4"
+  # Panel D — purple
+  - "#8B5CB7"
+  - "#6B3F9A"
+  - "#F7F4FA"
+  # High-impact red callout
+  - "#A32D2D"
+  - "#FDF6F4"
+  # Neutrals
+  - "#FFFFFF"
+  - "#333333"
+  - "#1B3A6E"
