@@ -1,0 +1,163 @@
+name: PR Autopilot
+
+# Automated CR / Devin review-fix-merge cycle.
+#
+# Triggers on every CodeRabbit / Devin review-comment + on every push to a PR
+# branch + on PR opens. The autopilot reads unaddressed review comments,
+# dispatches Claude (via the official anthropics/claude-code-action) to write
+# fixes, replies bilingually to each thread, and squash-merges once
+# `reviewDecision == APPROVED` AND `mergeable == MERGEABLE`.
+#
+# Designed to be the v0.1.0 → v0.1.1 → v0.1.2 review-cycle pattern (which I
+# ran by hand for 6 + 2 rounds) automated end-to-end.
+#
+# 自动化 CR / Devin 评审-修复-合并循环。
+#
+# 触发：每条 CodeRabbit / Devin 评审评论、PR 分支每次 push、PR 新开。
+# autopilot 读取未处理的评审评论，dispatch Claude（官方
+# anthropics/claude-code-action）写修复，逐 thread 双语回复，并在
+# `reviewDecision == APPROVED` 且 `mergeable == MERGEABLE` 时 squash 合并。
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize]
+  pull_request_review:
+    types: [submitted]
+  pull_request_review_comment:
+    types: [created]
+  issue_comment:
+    types: [created]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: "PR number to autopilot (omit on event-triggered runs)"
+        required: false
+
+# Coalesce concurrent runs per-PR so a flurry of CR comments doesn't
+# spawn N parallel autopilot jobs racing on the same branch.
+concurrency:
+  group: pr-autopilot-${{ github.event.pull_request.number || github.event.issue.number || github.event.inputs.pr_number }}
+  cancel-in-progress: false  # let an in-flight fix finish before next run
+
+permissions:
+  contents: write          # to commit + push fixes
+  pull-requests: write     # to reply to threads + merge
+  issues: write            # to leave summary comments
+  id-token: write          # for OIDC if Anthropic uses it
+
+jobs:
+  triage:
+    # Skip self-triggered events (autopilot bot pushes / replies its own
+    # comments → would loop). Run only when a human or a review bot
+    # (CodeRabbit / Devin) caused the event.
+    if: >-
+      github.actor != 'github-actions[bot]'
+      && github.actor != 'claude[bot]'
+      && (github.event.pull_request.draft != true)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    outputs:
+      should_run: ${{ steps.classify.outputs.should_run }}
+      pr_number: ${{ steps.classify.outputs.pr_number }}
+      mode: ${{ steps.classify.outputs.mode }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: pip install requests pyyaml
+
+      - id: classify
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          EVENT_NAME: ${{ github.event_name }}
+          PR_INPUT: ${{ github.event.inputs.pr_number }}
+          EVENT_PR: ${{ github.event.pull_request.number }}
+          EVENT_ISSUE_PR: ${{ github.event.issue.number }}
+        run: |
+          set -euo pipefail
+          python scripts/pr_autopilot_dispatch.py classify \
+              --event "$EVENT_NAME" \
+              --pr "${PR_INPUT:-${EVENT_PR:-${EVENT_ISSUE_PR:-}}}" \
+              --emit-github-output
+
+  fix:
+    needs: triage
+    if: needs.triage.outputs.should_run == 'true' && needs.triage.outputs.mode == 'fix'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+          ref: refs/pull/${{ needs.triage.outputs.pr_number }}/head
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: pip install requests pyyaml lxml
+
+      # Dispatch Claude with the unaddressed-review-thread bundle.
+      # The reusable action takes care of the API call, tool use,
+      # commit, and push. We just supply a focused prompt + the bundle.
+      - id: bundle
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          python scripts/pr_autopilot_dispatch.py prepare-bundle \
+              --pr "${{ needs.triage.outputs.pr_number }}" \
+              --output /tmp/autopilot-bundle.json
+          echo "bundle_path=/tmp/autopilot-bundle.json" >> "$GITHUB_OUTPUT"
+
+      - name: Apply fixes via Claude
+        uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          mode: pr-fix
+          # The action reads the bundle and the repo, writes patches,
+          # commits + pushes, and posts per-thread replies via gh CLI.
+          prompt_file: scripts/autopilot_prompts/fix_round.md
+          bundle_path: ${{ steps.bundle.outputs.bundle_path }}
+          # Belt + suspenders: refuse to push if the diff touches files
+          # outside this allow-list. The autopilot sticks to its lane.
+          allow_paths: |
+            scripts/**
+            _journal-configs/**
+            _palettes/**
+            templates/**
+            SKILL.md
+            README.md
+            .github/workflows/**
+
+      - name: Reply to threads + post summary
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          python scripts/pr_autopilot_dispatch.py reply-and-summarize \
+              --pr "${{ needs.triage.outputs.pr_number }}" \
+              --bundle /tmp/autopilot-bundle.json \
+              --commit-sha "$(git rev-parse --short HEAD)"
+
+  merge:
+    needs: triage
+    if: needs.triage.outputs.should_run == 'true' && needs.triage.outputs.mode == 'merge'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          gh pr merge "${{ needs.triage.outputs.pr_number }}" --squash \
+              --subject "$(gh pr view "${{ needs.triage.outputs.pr_number }}" --json title --jq .title)" \
+              --body "$(gh pr view "${{ needs.triage.outputs.pr_number }}" --json body --jq .body)"
+          gh pr comment "${{ needs.triage.outputs.pr_number }}" \
+              --body "🤖 PR Autopilot squash-merged this PR after \`reviewDecision == APPROVED\` + \`mergeable == MERGEABLE\`. Configured at \`.github/workflows/pr-autopilot.yml\`."
