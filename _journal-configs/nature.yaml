@@ -1,0 +1,27 @@
+name: Nature
+publisher: Springer Nature
+url: https://www.nature.com/nature/for-authors/final-submission
+
+sizes:
+  single_column: {width_mm: 89,  max_height_mm: 247}
+  double_column: {width_mm: 183, max_height_mm: 247}
+
+fonts:
+  preferred: [Arial, Helvetica]
+  forbidden: [Comic Sans, Papyrus, Wingdings]
+
+font_size:
+  min_pt: 5
+  max_pt: 7
+
+line_weight:
+  min_pt: 0.25
+
+color_mode: RGB
+file_formats: [pdf, eps, ai, tif]
+
+notes: |
+  Nature accepts vector figures only; embed a 300+ DPI raster only when
+  the asset is intrinsically raster (microscopy, photo). Use Arial
+  throughout. Final figures are typeset to single (89 mm) or double
+  (183 mm) column width. Keep line weights ≥ 0.25 pt at final size.

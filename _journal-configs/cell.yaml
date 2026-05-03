@@ -1,0 +1,26 @@
+name: Cell
+publisher: Cell Press / Elsevier
+url: https://www.cell.com/cell/authors
+
+sizes:
+  single_column: {width_mm: 85,  max_height_mm: 225}
+  double_column: {width_mm: 174, max_height_mm: 225}
+
+fonts:
+  preferred: [Arial, Helvetica]
+  forbidden: [Comic Sans, Papyrus]
+
+font_size:
+  min_pt: 6
+  max_pt: 8
+
+line_weight:
+  min_pt: 0.25
+
+color_mode: RGB
+file_formats: [pdf, eps, ai, tif]
+
+notes: |
+  Cell prefers vector PDF or EPS at 300+ DPI for raster portions. Body
+  text in figures should match Arial 6–8 pt. Multi-panel figures use
+  bold lowercase labels ("a", "b", …) flush left.

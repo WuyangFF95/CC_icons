@@ -22,3 +22,4 @@ sci-illustration-library/
 
 # Claude Code session metadata (per-workspace)
 .claude/
+.gstack/
