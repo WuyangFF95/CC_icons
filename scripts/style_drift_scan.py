@@ -306,7 +306,7 @@ def main() -> int:
                              "(default: <library-root>/_style-references)")
     parser.add_argument("--threshold-bits", type=int, default=12,
                         help="Hamming distance (out of 64) above which to flag "
-                             "drift (default: 12 bits ≈ 18.75%)")
+                             "drift (default: 12 / 64 ≈ 19 %% bit-flip)")
     parser.add_argument("--report", type=Path, default=None,
                         help="markdown report output path (default: stdout)")
     parser.add_argument("--dry-run", action="store_true",
