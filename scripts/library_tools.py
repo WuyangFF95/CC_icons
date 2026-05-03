@@ -71,6 +71,22 @@ except (ImportError, OSError):
     HAS_PPTX = False
 
 
+# Narrow set of exceptions we expect from per-element render attempts in
+# cmd_preview / cmd_export. Anything else (KeyError, AttributeError, etc.)
+# is a real bug and should propagate up rather than be silently caught.
+#   - OSError              file not found, libcairo missing, broken Pillow IO
+#   - ValueError           cairosvg internal "bad SVG" path
+#   - etree.XMLSyntaxError lxml's strict parse error
+#   - etree.ParseError     cairosvg's downstream parse failure
+# When Pillow is available we also expect UnidentifiedImageError for raster
+# files that aren't valid PNG/JPEG (truncated download, mis-extension, etc.).
+_RENDER_EXCEPTIONS: tuple[type[BaseException], ...] = (
+    OSError, ValueError, etree.XMLSyntaxError, etree.ParseError,
+)
+if HAS_PILLOW:
+    _RENDER_EXCEPTIONS = _RENDER_EXCEPTIONS + (Image.UnidentifiedImageError,)
+
+
 SVG_NS = {"svg": "http://www.w3.org/2000/svg"}
 # Mutated in main() when --library-root is supplied.
 LIBRARY_ROOT = Path.home() / "sci-illustration-library"
@@ -107,7 +123,7 @@ def load_unified_index() -> list[dict]:
                     seen_ids.add(rid)
                     r.setdefault("_root", json_index.parent)
                     records.append(r)
-        except Exception as exc:
+        except (json.JSONDecodeError, OSError) as exc:
             print(f"[warn] failed to parse {json_index}: {exc}", file=sys.stderr)
 
     # 2. Legacy per-category YAML (manually registered elements).
@@ -136,7 +152,7 @@ def load_unified_index() -> list[dict]:
                     "_legacy": True,
                     "_meta": entry,
                 })
-        except Exception as exc:
+        except (yaml.YAMLError, OSError) as exc:
             print(f"[warn] failed to parse {yaml_index}: {exc}", file=sys.stderr)
 
     return records
@@ -158,7 +174,7 @@ def quality_check(svg_path: Path) -> dict:
     try:
         tree = etree.parse(str(svg_path))
         root = tree.getroot()
-    except Exception as exc:
+    except (etree.XMLSyntaxError, etree.ParseError, OSError) as exc:
         return {"pass": False, "error": str(exc)}
 
     paths = root.findall(".//svg:path", SVG_NS)
@@ -629,7 +645,7 @@ def cmd_preview(args: argparse.Namespace) -> int:
             paste_x = x + (cell - img.width) // 2
             paste_y = y + (cell - img.height) // 2
             canvas.paste(img, (paste_x, paste_y))
-        except Exception as exc:
+        except _RENDER_EXCEPTIONS as exc:
             draw.rectangle([x, y, x + cell, y + cell], outline="orange")
             draw.text((x + 4, y + 4),
                       f"render fail: {type(exc).__name__}",
@@ -708,7 +724,7 @@ def cmd_export(args: argparse.Namespace) -> int:
                         write_to=str(picture_path),
                         output_width=1200,
                     )
-                except Exception as exc:
+                except _RENDER_EXCEPTIONS as exc:
                     print(f"  [skip] {r['id']}: SVG render failed "
                           f"({type(exc).__name__}: {exc})",
                           file=sys.stderr)
