@@ -1,0 +1,351 @@
+name: PR Autopilot
+
+# Automated CR / Devin review-fix-merge cycle, with three cost tiers:
+#
+#   Tier 0 — FREE: apply_committable_suggestions.py applies CR's
+#                  ```suggestion``` blocks verbatim, no LLM in the loop.
+#                  Typically clears 50–80 % of round-1 comments.
+#   Tier 1 — $0 marginal (Max subscription): claude-code-action with
+#                  CLAUDE_CODE_OAUTH_TOKEN handles the rest.
+#   Tier 2 — pay-per-call (API): same action with ANTHROPIC_API_KEY.
+#
+# A run picks the most expensive tier whose secret is configured, and
+# always runs Tier 0 first regardless of which higher tier is enabled.
+# Without any secret, Tier 0 still runs and the workflow no-ops on
+# anything CR didn't ship a committable suggestion for.
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize, ready_for_review]
+  pull_request_review:
+    types: [submitted]
+  pull_request_review_comment:
+    types: [created]
+  issue_comment:
+    # `issue_comment` fires for both issues and PRs. The `triage` job
+    # filters out non-PR issues via `github.event.issue.pull_request`.
+    types: [created]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: "PR number to autopilot (omit on event-triggered runs)"
+        required: false
+
+# Coalesce concurrent runs per-PR so a flurry of CR comments doesn't
+# spawn N parallel autopilot jobs racing on the same branch.
+concurrency:
+  group: pr-autopilot-${{ github.event.pull_request.number || github.event.issue.number || github.event.inputs.pr_number }}
+  cancel-in-progress: false  # let an in-flight fix finish before next run
+
+permissions:
+  contents: write          # to commit + push fixes
+  pull-requests: write     # to reply to threads + merge
+  issues: write            # to leave summary comments
+
+jobs:
+  triage:
+    # Skip self-triggered events (autopilot bot pushes / replies its own
+    # comments would loop). Skip non-PR issue comments (issue_comment
+    # fires for both issues and PRs; we only want PR comments). Skip
+    # drafts (used as a manual pause switch).
+    if: >-
+      github.actor != 'github-actions[bot]'
+      && github.actor != 'claude[bot]'
+      && (github.event_name != 'issue_comment' || github.event.issue.pull_request != null)
+      && (github.event.pull_request.draft != true)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      should_run: ${{ steps.classify.outputs.should_run }}
+      pr_number: ${{ steps.classify.outputs.pr_number }}
+      mode: ${{ steps.classify.outputs.mode }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: pip install requests pyyaml
+
+      - id: classify
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          EVENT_NAME: ${{ github.event_name }}
+          PR_INPUT: ${{ github.event.inputs.pr_number }}
+          EVENT_PR: ${{ github.event.pull_request.number }}
+          EVENT_ISSUE_PR: ${{ github.event.issue.number }}
+        run: |
+          set -euo pipefail
+          # Resolve PR number; on workflow_dispatch without input it can
+          # be empty. Pass --pr only when non-empty so argparse's
+          # `type=int` doesn't crash on int(""); classify() handles
+          # `pr_number is None` cleanly by returning noop.
+          pr_arg="${PR_INPUT:-${EVENT_PR:-${EVENT_ISSUE_PR:-}}}"
+          python scripts/pr_autopilot_dispatch.py classify \
+              --event "$EVENT_NAME" \
+              ${pr_arg:+--pr "$pr_arg"} \
+              --emit-github-output
+
+  fix:
+    needs: triage
+    if: needs.triage.outputs.should_run == 'true' && needs.triage.outputs.mode == 'fix'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # Job-level env so step `if:` expressions can read these (step-level
+    # `env:` isn't visible to that step's own `if:`).
+    env:
+      HAS_OAUTH:   ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN != '' }}
+      HAS_API_KEY: ${{ secrets.ANTHROPIC_API_KEY != '' }}
+    steps:
+      # Resolve the PR's actual source-branch name once and use it for
+      # every push from this job. Checking out `refs/pull/N/head` puts us
+      # in detached HEAD; pushing back via `git rev-parse --abbrev-ref
+      # HEAD` would resolve to the literal string "HEAD" and create a
+      # remote branch called "HEAD", losing the autopilot's commits.
+      - id: prinfo
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          ref=$(gh pr view "${{ needs.triage.outputs.pr_number }}" \
+                  --repo "$GITHUB_REPOSITORY" --json headRefName --jq .headRefName)
+          if [ -z "$ref" ]; then
+            echo "::error::could not resolve PR head ref"; exit 1
+          fi
+          echo "head_ref=$ref" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+          # Check out the actual branch (not refs/pull/N/head) so we're
+          # NOT in detached HEAD; this also lets `git pull --rebase` work
+          # naturally if a concurrent push lands while we work.
+          ref: ${{ steps.prinfo.outputs.head_ref }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: pip install requests pyyaml lxml
+
+      - name: Configure git for autopilot commits
+        run: |
+          git config user.name  "pr-autopilot[bot]"
+          git config user.email "pr-autopilot[bot]@users.noreply.github.com"
+
+      # Capture a single baseline SHA early. The Path guard later compares
+      # `git diff $base_sha HEAD` regardless of how many commits the fix
+      # job produced; without this, falling back to `HEAD~1` would only
+      # check the most recent commit and miss out-of-scope changes that
+      # landed in earlier commits of the same job.
+      - id: baseline
+        run: |
+          base="$(git rev-parse HEAD)"
+          echo "sha=$base" >> "$GITHUB_OUTPUT"
+
+      # ─────────────────────────────────────────────────────────────────
+      # Tier 0 (FREE, deterministic): apply CR's `suggestion` blocks
+      # verbatim. No LLM, no API key, no token spend. This typically
+      # clears 50–80 % of round-1 review comments and a meaningful
+      # share of subsequent rounds.
+      # ─────────────────────────────────────────────────────────────────
+      - name: Tier 0 — apply committable suggestions
+        id: tier0
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HEAD_REF: ${{ steps.prinfo.outputs.head_ref }}
+        # Exit 2 from the script means "ran cleanly, nothing to apply" —
+        # not an error. We still want to dispatch Tier 1/2 in that case,
+        # so map exit 2 to success here.
+        #
+        # The script applies + commits but does NOT push and does NOT
+        # reply. Push happens here (after `git pull --rebase` to absorb
+        # any concurrent pushes); replies happen in the next step ONLY
+        # IF the push succeeded — so we never end up with a thread
+        # reply pointing at a commit that didn't land.
+        run: |
+          set +e
+          python scripts/apply_committable_suggestions.py \
+              --pr "${{ needs.triage.outputs.pr_number }}" \
+              --emit-applied /tmp/autopilot-applied.json
+          rc=$?
+          set -e
+          if [ "$rc" -eq 0 ]; then
+            # Pull anything that landed concurrently (a human pushing,
+            # or a previous autopilot run that finished after our
+            # checkout). `--autostash` keeps Tier 0's local commit safe
+            # if the pull turns out to be a no-op rebase.
+            git pull --rebase --autostash origin "$HEAD_REF" || true
+            git push origin "HEAD:refs/heads/$HEAD_REF"
+            echo "tier0_applied=true" >> "$GITHUB_OUTPUT"
+          elif [ "$rc" -eq 2 ]; then
+            echo "tier0_applied=false" >> "$GITHUB_OUTPUT"
+          else
+            exit "$rc"
+          fi
+
+      - name: Tier 0 — reply to applied threads (only after push succeeded)
+        if: steps.tier0.outputs.tier0_applied == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          python scripts/apply_committable_suggestions.py reply-applied \
+              --pr "${{ needs.triage.outputs.pr_number }}" \
+              --applied /tmp/autopilot-applied.json \
+              --commit-sha "$(git rev-parse --short HEAD)"
+
+      # ─────────────────────────────────────────────────────────────────
+      # Refresh the unaddressed-thread bundle AFTER Tier 0 pushed —
+      # threads it auto-applied are now considered addressed, so Tier 1
+      # / 2 won't waste tokens on them.
+      # ─────────────────────────────────────────────────────────────────
+      - id: bundle
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          python scripts/pr_autopilot_dispatch.py prepare-bundle \
+              --pr "${{ needs.triage.outputs.pr_number }}" \
+              --output /tmp/autopilot-bundle.json
+          n=$(python -c "import json; print(len(json.load(open('/tmp/autopilot-bundle.json'))['threads']))")
+          echo "remaining=$n" >> "$GITHUB_OUTPUT"
+
+      # ─────────────────────────────────────────────────────────────────
+      # Tier 1 / 2: dispatch claude-code-action only when threads remain
+      # AND a credential is configured. The action accepts EITHER a
+      # Claude Max OAuth token (no marginal cost on a Max subscription)
+      # OR an Anthropic API key (pay-per-call). Prefer OAuth.
+      # ─────────────────────────────────────────────────────────────────
+      - name: Build prompt for Claude
+        id: prompt
+        if: steps.bundle.outputs.remaining != '0'
+        run: |
+          set -euo pipefail
+          {
+            cat scripts/autopilot_prompts/fix_round.md
+            echo
+            echo "## Bundle (the unaddressed review threads)"
+            echo
+            echo '```json'
+            cat /tmp/autopilot-bundle.json
+            echo '```'
+          } > /tmp/autopilot-prompt.md
+          {
+            echo 'PROMPT<<AUTOPILOT_EOF'
+            cat /tmp/autopilot-prompt.md
+            echo 'AUTOPILOT_EOF'
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Tier 1 / 2 — dispatch claude-code-action
+        # `env.HAS_OAUTH` / `env.HAS_API_KEY` come from the JOB-level env
+        # block (see `fix.env:` above); step-level env vars are NOT
+        # available inside the same step's `if:` expression, so we
+        # cannot define them here.
+        if: steps.bundle.outputs.remaining != '0' && (env.HAS_OAUTH == 'true' || env.HAS_API_KEY == 'true')
+        uses: anthropics/claude-code-action@v1
+        with:
+          # Prefer Max OAuth (no marginal cost) over API key when both set.
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          anthropic_api_key:       ${{ secrets.ANTHROPIC_API_KEY }}
+          github_token:            ${{ secrets.GITHUB_TOKEN }}
+          prompt:                  ${{ steps.prompt.outputs.PROMPT }}
+          # Disable sticky comment so the autopilot doesn't keep editing
+          # the same status comment forever; we manage our own thread
+          # replies via the dispatch script below.
+          use_sticky_comment: "false"
+          track_progress:     "false"
+
+      # ─────────────────────────────────────────────────────────────────
+      # Path guard: inspect what Claude committed *locally* (the prompt
+      # in scripts/autopilot_prompts/fix_round.md tells the agent NOT to
+      # push). If anything sits outside the allow-list, `git reset --hard`
+      # wipes it before the next step gets a chance to push to remote.
+      # This is the only window where reverting is safe — once a push
+      # lands on the PR branch, there's no clean undo.
+      # ─────────────────────────────────────────────────────────────────
+      - name: Path guard
+        if: always() && steps.bundle.outputs.remaining != '0'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Use the SAME baseline captured before any fix-job commits
+          # landed (see `baseline` step). Falling back to `HEAD~1`
+          # would only inspect the most recent commit, missing
+          # out-of-scope edits in earlier commits when the fix job
+          # produced more than one.
+          BASE_SHA: ${{ steps.baseline.outputs.sha }}
+        run: |
+          set -euo pipefail
+          touched=$(git diff --name-only "$BASE_SHA" HEAD || true)
+          out_of_scope=$(echo "$touched" | grep -Ev '^(scripts/|_journal-configs/|_palettes/|templates/|SKILL\.md|README\.md|\.github/workflows/)' \
+                         | grep -v '^.github/workflows/pr-autopilot\.yml$' || true)
+          if [ -n "$out_of_scope" ]; then
+            echo "::error::Autopilot wrote outside the allow-list:"
+            echo "$out_of_scope"
+            git reset --hard "$BASE_SHA"
+            exit 1
+          fi
+          # Special case: never let Claude edit the autopilot itself.
+          self_edit=$(echo "$touched" | grep -E '^(\.github/workflows/pr-autopilot\.yml|scripts/pr_autopilot_dispatch\.py|scripts/apply_committable_suggestions\.py|scripts/autopilot_prompts/)' || true)
+          if [ -n "$self_edit" ]; then
+            echo "::error::Autopilot tried to edit its own logic; reverting:"
+            echo "$self_edit"
+            git reset --hard "$BASE_SHA"
+            exit 1
+          fi
+
+      # ─────────────────────────────────────────────────────────────────
+      # Push Tier 1/2 fixes: the prompt told Claude not to push, so any
+      # commits it added are still local. Push them only after the Path
+      # guard above succeeded. If `set -e` aborted the guard step, this
+      # step is skipped automatically (no `if: always()`).
+      # ─────────────────────────────────────────────────────────────────
+      - name: Push Tier 1/2 fixes (only after Path guard passed)
+        if: steps.bundle.outputs.remaining != '0' && (env.HAS_OAUTH == 'true' || env.HAS_API_KEY == 'true')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HEAD_REF: ${{ steps.prinfo.outputs.head_ref }}
+          BASE_SHA: ${{ steps.baseline.outputs.sha }}
+        run: |
+          set -euo pipefail
+          if [ "$(git rev-parse HEAD)" = "$BASE_SHA" ]; then
+            echo "No commits beyond baseline — Claude wrote no patches."
+            exit 0
+          fi
+          # Absorb anything that landed concurrently (a human pushing,
+          # or another autopilot run finishing). `--autostash` keeps our
+          # local commits safe across the rebase.
+          git pull --rebase --autostash origin "$HEAD_REF" || true
+          git push origin "HEAD:refs/heads/$HEAD_REF"
+
+      - name: Reply to threads + post summary
+        if: steps.bundle.outputs.remaining != '0'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          python scripts/pr_autopilot_dispatch.py reply-and-summarize \
+              --pr "${{ needs.triage.outputs.pr_number }}" \
+              --bundle /tmp/autopilot-bundle.json \
+              --commit-sha "$(git rev-parse --short HEAD)" \
+              --disposition-file /tmp/autopilot-disposition.json
+
+  merge:
+    needs: triage
+    if: needs.triage.outputs.should_run == 'true' && needs.triage.outputs.mode == 'merge'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          gh pr merge "${{ needs.triage.outputs.pr_number }}" --squash \
+              --subject "$(gh pr view "${{ needs.triage.outputs.pr_number }}" --json title --jq .title)" \
+              --body "$(gh pr view "${{ needs.triage.outputs.pr_number }}" --json body --jq .body)"
+          gh pr comment "${{ needs.triage.outputs.pr_number }}" \
+              --body "🤖 PR Autopilot squash-merged this PR after \`reviewDecision == APPROVED\` + \`mergeable == MERGEABLE\`. Configured at \`.github/workflows/pr-autopilot.yml\`."
