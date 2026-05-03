@@ -41,14 +41,22 @@ You will be given a JSON bundle at `${BUNDLE_PATH}` containing every
    - `python -c "from lxml import etree; [etree.parse(p) for p in changed_svg_files]"`
    - `python -c "import yaml; [yaml.safe_load(open(p)) for p in changed_yaml_files]"`
 
-5. **Commit** with a bilingual message in this exact shape:
-   ```
-   fix(<scope>): address round-N review items / 处理 round-N 评审 N 项
+5. **Commit** with a bilingual message in the canonical shape (the
+   Style guide section below is the single source of truth — match it
+   exactly):
+
+   ```text
+   fix(<scope>): <english one-liner> / <chinese one-liner>
 
    <english body — bullet per fix>
 
    <chinese body — bullet per fix, mirroring the english one>
    ```
+
+   Both the English and Chinese versions of the title-line are on the
+   first line, separated by ` / ` — this is what the historical commits
+   on `main` look like and what Style guide → "Bilingual commit body"
+   refers to.
 
 6. **Push** to the PR branch.
 
@@ -91,7 +99,8 @@ You will be given a JSON bundle at `${BUNDLE_PATH}` containing every
 - **No backwards-compatibility shims** unless the comment trail explicitly
   asks for them.
 - **Type hints**: on every new function signature.
-- **Bilingual commit body**: English block first, then a `中文` separator,
-  then the same content in Chinese.
+- **Bilingual commit body**: title line is `<english> / <chinese>`;
+  body is English block first, blank line, then the same content in
+  Chinese (matches the title-line shape in Step 5 above).
 - **Tight diffs**: prefer surgical changes over rewrites. Reviewers see
   every line you touch.

@@ -89,12 +89,37 @@ jobs:
     if: needs.triage.outputs.should_run == 'true' && needs.triage.outputs.mode == 'fix'
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    # Job-level env so step `if:` expressions can read these (step-level
+    # `env:` isn't visible to that step's own `if:`).
+    env:
+      HAS_OAUTH:   ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN != '' }}
+      HAS_API_KEY: ${{ secrets.ANTHROPIC_API_KEY != '' }}
     steps:
+      # Resolve the PR's actual source-branch name once and use it for
+      # every push from this job. Checking out `refs/pull/N/head` puts us
+      # in detached HEAD; pushing back via `git rev-parse --abbrev-ref
+      # HEAD` would resolve to the literal string "HEAD" and create a
+      # remote branch called "HEAD", losing the autopilot's commits.
+      - id: prinfo
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          ref=$(gh pr view "${{ needs.triage.outputs.pr_number }}" \
+                  --repo "$GITHUB_REPOSITORY" --json headRefName --jq .headRefName)
+          if [ -z "$ref" ]; then
+            echo "::error::could not resolve PR head ref"; exit 1
+          fi
+          echo "head_ref=$ref" >> "$GITHUB_OUTPUT"
+
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
-          ref: refs/pull/${{ needs.triage.outputs.pr_number }}/head
+          # Check out the actual branch (not refs/pull/N/head) so we're
+          # NOT in detached HEAD; this also lets `git pull --rebase` work
+          # naturally if a concurrent push lands while we work.
+          ref: ${{ steps.prinfo.outputs.head_ref }}
 
       - uses: actions/setup-python@v5
         with:
@@ -106,6 +131,16 @@ jobs:
           git config user.name  "pr-autopilot[bot]"
           git config user.email "pr-autopilot[bot]@users.noreply.github.com"
 
+      # Capture a single baseline SHA early. The Path guard later compares
+      # `git diff $base_sha HEAD` regardless of how many commits the fix
+      # job produced; without this, falling back to `HEAD~1` would only
+      # check the most recent commit and miss out-of-scope changes that
+      # landed in earlier commits of the same job.
+      - id: baseline
+        run: |
+          base="$(git rev-parse HEAD)"
+          echo "sha=$base" >> "$GITHUB_OUTPUT"
+
       # ─────────────────────────────────────────────────────────────────
       # Tier 0 (FREE, deterministic): apply CR's `suggestion` blocks
       # verbatim. No LLM, no API key, no token spend. This typically
@@ -116,24 +151,47 @@ jobs:
         id: tier0
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HEAD_REF: ${{ steps.prinfo.outputs.head_ref }}
         # Exit 2 from the script means "ran cleanly, nothing to apply" —
         # not an error. We still want to dispatch Tier 1/2 in that case,
         # so map exit 2 to success here.
+        #
+        # The script applies + commits but does NOT push and does NOT
+        # reply. Push happens here (after `git pull --rebase` to absorb
+        # any concurrent pushes); replies happen in the next step ONLY
+        # IF the push succeeded — so we never end up with a thread
+        # reply pointing at a commit that didn't land.
         run: |
           set +e
           python scripts/apply_committable_suggestions.py \
               --pr "${{ needs.triage.outputs.pr_number }}" \
-              --reply
+              --emit-applied /tmp/autopilot-applied.json
           rc=$?
           set -e
           if [ "$rc" -eq 0 ]; then
-            git push origin "HEAD:refs/heads/$(git rev-parse --abbrev-ref HEAD)"
+            # Pull anything that landed concurrently (a human pushing,
+            # or a previous autopilot run that finished after our
+            # checkout). `--autostash` keeps Tier 0's local commit safe
+            # if the pull turns out to be a no-op rebase.
+            git pull --rebase --autostash origin "$HEAD_REF" || true
+            git push origin "HEAD:refs/heads/$HEAD_REF"
             echo "tier0_applied=true" >> "$GITHUB_OUTPUT"
           elif [ "$rc" -eq 2 ]; then
             echo "tier0_applied=false" >> "$GITHUB_OUTPUT"
           else
             exit "$rc"
           fi
+
+      - name: Tier 0 — reply to applied threads (only after push succeeded)
+        if: steps.tier0.outputs.tier0_applied == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          python scripts/apply_committable_suggestions.py reply-applied \
+              --pr "${{ needs.triage.outputs.pr_number }}" \
+              --applied /tmp/autopilot-applied.json \
+              --commit-sha "$(git rev-parse --short HEAD)"
 
       # ─────────────────────────────────────────────────────────────────
       # Refresh the unaddressed-thread bundle AFTER Tier 0 pushed —
@@ -178,12 +236,11 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       - name: Tier 1 / 2 — dispatch claude-code-action
+        # `env.HAS_OAUTH` / `env.HAS_API_KEY` come from the JOB-level env
+        # block (see `fix.env:` above); step-level env vars are NOT
+        # available inside the same step's `if:` expression, so we
+        # cannot define them here.
         if: steps.bundle.outputs.remaining != '0' && (env.HAS_OAUTH == 'true' || env.HAS_API_KEY == 'true')
-        env:
-          # Booleans for the `if:` above. Secrets aren't directly
-          # comparable in expressions, so we cast to env strings.
-          HAS_OAUTH:  ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN != '' }}
-          HAS_API_KEY: ${{ secrets.ANTHROPIC_API_KEY != '' }}
         uses: anthropics/claude-code-action@v1
         with:
           # Prefer Max OAuth (no marginal cost) over API key when both set.
@@ -206,20 +263,21 @@ jobs:
         if: always() && steps.bundle.outputs.remaining != '0'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Use the SAME baseline captured before any fix-job commits
+          # landed (see `baseline` step). Falling back to `HEAD~1`
+          # would only inspect the most recent commit, missing
+          # out-of-scope edits in earlier commits when the fix job
+          # produced more than one.
+          BASE_SHA: ${{ steps.baseline.outputs.sha }}
         run: |
           set -euo pipefail
-          # Compare against the PR head ref BEFORE this fix step ran.
-          base_sha="${{ github.event.pull_request.head.sha || '' }}"
-          if [ -z "$base_sha" ]; then
-            base_sha="$(git rev-parse HEAD~1 2>/dev/null || git rev-parse HEAD)"
-          fi
-          touched=$(git diff --name-only "$base_sha" HEAD || true)
+          touched=$(git diff --name-only "$BASE_SHA" HEAD || true)
           out_of_scope=$(echo "$touched" | grep -Ev '^(scripts/|_journal-configs/|_palettes/|templates/|SKILL\.md|README\.md|\.github/workflows/)' \
                          | grep -v '^.github/workflows/pr-autopilot\.yml$' || true)
           if [ -n "$out_of_scope" ]; then
             echo "::error::Autopilot wrote outside the allow-list:"
             echo "$out_of_scope"
-            git reset --hard "$base_sha"
+            git reset --hard "$BASE_SHA"
             exit 1
           fi
           # Special case: never let Claude edit the autopilot itself.
@@ -227,7 +285,7 @@ jobs:
           if [ -n "$self_edit" ]; then
             echo "::error::Autopilot tried to edit its own logic; reverting:"
             echo "$self_edit"
-            git reset --hard "$base_sha"
+            git reset --hard "$BASE_SHA"
             exit 1
           fi
 
