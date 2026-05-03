@@ -91,8 +91,9 @@ PR Autopilot 自动化我（@WuyangFF95）在 PR#1（6 轮 35 评审项）和 PR
 │   └─────┬──────────┘  • mode=merge → APPROVED + MERGEABLE             │
 │         │             • noop       → otherwise                        │
 │   ┌─────▼──────────┐                                                  │
-│   │ fix            │  prepare-bundle: dump unaddressed threads        │
-│   │  (5–20 min)    │  → anthropics/claude-code-action: read repo +    │
+│   │ fix            │  Tier 0: apply committable suggestions           │
+│   │  (5–20 min)    │  → prepare-bundle: dump remaining threads        │
+│   │                │  → anthropics/claude-code-action: read repo +    │
 │   │                │     bundle, write patches, commit + push         │
 │   │                │  → reply-and-summarize: per-thread + summary     │
 │   └────────────────┘                                                  │

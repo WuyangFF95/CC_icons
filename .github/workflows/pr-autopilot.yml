@@ -16,7 +16,7 @@ name: PR Autopilot
 
 on:
   pull_request:
-    types: [opened, reopened, synchronize]
+    types: [opened, reopened, synchronize, ready_for_review]
   pull_request_review:
     types: [submitted]
   pull_request_review_comment:
@@ -281,7 +281,7 @@ jobs:
             exit 1
           fi
           # Special case: never let Claude edit the autopilot itself.
-          self_edit=$(echo "$touched" | grep -E '^(\.github/workflows/pr-autopilot\.yml|scripts/pr_autopilot_dispatch\.py|scripts/autopilot_prompts/)' || true)
+          self_edit=$(echo "$touched" | grep -E '^(\.github/workflows/pr-autopilot\.yml|scripts/pr_autopilot_dispatch\.py|scripts/apply_committable_suggestions\.py|scripts/autopilot_prompts/)' || true)
           if [ -n "$self_edit" ]; then
             echo "::error::Autopilot tried to edit its own logic; reverting:"
             echo "$self_edit"
