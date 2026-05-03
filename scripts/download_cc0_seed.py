@@ -515,6 +515,7 @@ def download_phylopic(
             # vector (e.g. assemble_figure.py uses <image> for raster, the
             # SVG-merge path for vector).
             rec["format"] = fmt
+            records.append(rec)
             pbar.update(1)
             time.sleep(0.05)  # be polite
 

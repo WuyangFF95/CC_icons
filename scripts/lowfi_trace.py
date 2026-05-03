@@ -141,7 +141,13 @@ def _flatten_gradient_to_flat_fill(
     root: etree._Element,
     gradient_id_to_color: dict[str, str],
 ) -> int:
-    """Replace every `url(#gradient-id)` reference with the gradient's mid-stop color."""
+    """Replace every `url(#gradient-id)` reference with the gradient's mid-stop color.
+
+    Walks both the explicit `fill` / `stroke` attributes AND the inline
+    `style="fill:url(#…); stroke:url(#…)"` form that Inkscape/Affinity emit;
+    without the style pass, gradient references baked into `style=` survive
+    the flatten and the downstream palette-snap can't reach them.
+    """
     flattened = 0
     for elem in root.iter():
         for attr in ("fill", "stroke"):
@@ -151,6 +157,25 @@ def _flatten_gradient_to_flat_fill(
                 if gid in gradient_id_to_color:
                     elem.set(attr, gradient_id_to_color[gid])
                     flattened += 1
+        style = elem.get("style") or ""
+        if "url(#" in style:
+            new_chunks: list[str] = []
+            style_changed = False
+            for chunk in style.split(";"):
+                key, sep, val = chunk.partition(":")
+                key_clean = key.strip().lower()
+                val_clean = val.strip()
+                if (key_clean in ("fill", "stroke")
+                        and val_clean.startswith("url(#")):
+                    gid = val_clean[5:].rstrip(")").strip("\"' ")
+                    if gid in gradient_id_to_color:
+                        new_chunks.append(f"{key.strip()}:{gradient_id_to_color[gid]}")
+                        flattened += 1
+                        style_changed = True
+                        continue
+                new_chunks.append(chunk)
+            if style_changed:
+                elem.set("style", ";".join(new_chunks))
     return flattened
 
 
@@ -226,7 +251,9 @@ def normalize_one(
                     stats.colors_snapped += 1
                     changed = True
 
-    # 3. Clamp stroke widths.
+    # 3. Clamp stroke widths. Cover both `stroke-width="..."` attributes
+    #    and inline `style="stroke-width:..."`, since Inkscape/Affinity
+    #    routinely emit the latter.
     if stroke_width_pt is not None:
         target = str(stroke_width_pt)
         for elem in root.iter():
@@ -235,10 +262,34 @@ def normalize_one(
                 elem.set("stroke-width", target)
                 stats.strokes_clamped += 1
                 changed = True
+            style = elem.get("style") or ""
+            if "stroke-width" in style:
+                new_chunks: list[str] = []
+                style_changed = False
+                for chunk in style.split(";"):
+                    key, sep, val = chunk.partition(":")
+                    if (key.strip().lower() == "stroke-width"
+                            and val.strip() != target):
+                        new_chunks.append(f"{key.strip()}:{target}")
+                        style_changed = True
+                        continue
+                    new_chunks.append(chunk)
+                if style_changed:
+                    elem.set("style", ";".join(new_chunks))
+                    stats.strokes_clamped += 1
+                    changed = True
 
     if changed:
-        out_path.parent.mkdir(parents=True, exist_ok=True)
-        tree.write(str(out_path), xml_declaration=True, encoding="utf-8")
+        # Tolerate write failures the same way the read path does — one
+        # bad path/permission on a single file shouldn't kill the whole
+        # batch (the caller's `walk_library` continues on a False return).
+        try:
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            tree.write(str(out_path), xml_declaration=True, encoding="utf-8")
+        except OSError as exc:
+            print(f"[skip] {svg_path}: failed to write {out_path}: {exc}",
+                  file=sys.stderr)
+            return False
     return changed
 
 
@@ -311,9 +362,14 @@ def walk_library(
             stats.files_normalized += 1
         else:
             # No-op: copy through so the normalized tree is complete and the
-            # downstream `library_root_normalized` is a 1:1 mirror.
-            out.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(svg, out)
+            # downstream `library_root_normalized` is a 1:1 mirror. Tolerate
+            # a single copy failure (permissions / disk full) and continue.
+            try:
+                out.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(svg, out)
+            except OSError as exc:
+                print(f"[skip] {svg}: failed to copy to {out}: {exc}",
+                      file=sys.stderr)
     return stats
 
 
@@ -350,6 +406,21 @@ def main() -> int:
         if args.output
         else library_root / "library_normalized"
     )
+    # Refuse to write into <library-root>/library, otherwise rglob() on the
+    # next run would re-pick up our own output and the library would
+    # recursively bloat (or two passes would normalize their own outputs).
+    src_dir = (library_root / "library").resolve()
+    try:
+        output_root.relative_to(src_dir)
+    except ValueError:
+        pass
+    else:
+        print(f"Error: --output ({output_root}) must not be inside the source "
+              f"library directory ({src_dir}); pick a sibling like "
+              f"{library_root / 'library_normalized'} instead.",
+              file=sys.stderr)
+        return 1
+
     palette = load_palette(args.palette.expanduser() if args.palette else None)
 
     print(f"library:  {library_root / 'library'}")

@@ -297,9 +297,14 @@ def main() -> int:
     rendered = sum(1 for r in catalog if r["thumb"])
     print(f"  rendered {rendered} thumbnails ({len(catalog) - rendered} missing/failed)")
 
+    # `json.dumps` does NOT escape `</`, so a `</script>` substring in any
+    # `name` / `tag` / etc. would prematurely close the inlined script tag
+    # and leave a local HTML-injection surface. Escape `</` -> `<\/` per
+    # the OWASP JSON-in-HTML guidance.
+    catalog_json = json.dumps(catalog, ensure_ascii=False).replace("</", "<\\/")
     html = _HTML_TEMPLATE.format(
         n=len(catalog), cell=args.cell_size,
-        catalog_json=json.dumps(catalog, ensure_ascii=False),
+        catalog_json=catalog_json,
     )
     out_html = output_dir / "index.html"
     out_html.write_text(html, encoding="utf-8")

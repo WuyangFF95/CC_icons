@@ -586,9 +586,15 @@ def _journal_config_dir(start: Path) -> Path:
 
 
 def load_journal_config(name: str, search_root: Path | None = None) -> dict:
-    """Load `<name>.yaml` from `_journal-configs/` and validate the schema."""
+    """Load `<name>.yaml` from `_journal-configs/` and validate the schema.
+
+    `name` is slugified before lookup so callers can pass either the
+    canonical filename (`nature-reviews-drug-discovery`) or the human form
+    (`Nature Reviews Drug Discovery`) — both resolve to the same file.
+    """
     cfg_dir = _journal_config_dir(search_root or Path(__file__).parent)
-    cfg_path = cfg_dir / f"{name}.yaml"
+    slug = re.sub(r"[^a-z0-9]+", "-", name.strip().lower()).strip("-")
+    cfg_path = cfg_dir / f"{slug}.yaml"
     if not cfg_path.exists():
         available = sorted(p.stem for p in cfg_dir.glob("*.yaml") if p.stem != "README")
         raise FileNotFoundError(
@@ -610,12 +616,26 @@ def _iter_text_elements(root: etree._Element):
 
 
 def _get_inherited_attr(elem: etree._Element, attr: str) -> str | None:
-    """Walk the parent chain looking for an attribute."""
+    """Walk the parent chain looking for an SVG presentation value.
+
+    Looks at both the explicit attribute (e.g. ``font-family="Arial"``) and
+    the inline ``style="..."`` declaration (``style="font-family:Arial;..."``).
+    Real-world SVGs from Inkscape, Affinity, Illustrator, etc. routinely
+    declare presentation values inline rather than as attributes — without
+    this, journal validation silently misses forbidden fonts and floor
+    violations that live inside ``style=``.
+    """
     cur: etree._Element | None = elem
     while cur is not None:
         val = cur.get(attr)
         if val:
             return val
+        style = cur.get("style") or ""
+        if attr in style:
+            for chunk in style.split(";"):
+                key, _, value = chunk.partition(":")
+                if key.strip() == attr and value.strip():
+                    return value.strip()
         cur = cur.getparent()
     return None
 
@@ -704,14 +724,65 @@ def validate_against_journal(svg_path: Path, journal_cfg: dict) -> tuple[list[st
             warnings.append(f"none of the preferred fonts {sorted(preferred)} "
                             f"were used (found: {sorted(used_fonts)})")
 
-    # Stroke widths.
+    # Stroke widths. Use the same presentation-attribute walker so values
+    # in `style="stroke-width:..."` and parent-chain inheritance are caught.
     for elem in root.iter():
-        sw_raw = elem.get("stroke-width")
+        sw_raw = _get_inherited_attr(elem, "stroke-width")
         sw_pt = _parse_pt(sw_raw)
         if sw_pt is not None and 0 < sw_pt < min_lw_pt:
             tag = elem.tag.split("}")[-1]
             errors.append(f"<{tag} id={elem.get('id')!r}> "
                           f"stroke-width {sw_pt:.2f}pt < {min_lw_pt}pt min")
+
+    # Canvas size limits. Read width / height attributes if present, else
+    # derive from viewBox. Compare against `sizes.<col>.{width_mm,
+    # max_height_mm}` and warn when any column exceeds the limit.
+    sizes_cfg = journal_cfg.get("sizes") or {}
+    if sizes_cfg:
+        # We treat user units as ~mm at the journal's intended print size
+        # (templates are typically authored at 1u ≈ 1mm). Honour explicit
+        # `width="...mm"` first; else fall back to viewBox.
+        canvas_w_mm: float | None = None
+        canvas_h_mm: float | None = None
+        w_raw = root.get("width") or ""
+        h_raw = root.get("height") or ""
+        if w_raw.endswith("mm"):
+            try:
+                canvas_w_mm = float(w_raw[:-2])
+            except ValueError:
+                pass
+        if h_raw.endswith("mm"):
+            try:
+                canvas_h_mm = float(h_raw[:-2])
+            except ValueError:
+                pass
+        if canvas_w_mm is None or canvas_h_mm is None:
+            vb_raw = (root.get("viewBox") or "").strip()
+            vb = [v for v in re.split(r"[\s,]+", vb_raw) if v]
+            if len(vb) >= 4:
+                try:
+                    if canvas_w_mm is None:
+                        canvas_w_mm = float(vb[2])
+                    if canvas_h_mm is None:
+                        canvas_h_mm = float(vb[3])
+                except ValueError:
+                    pass
+        if canvas_w_mm is not None and canvas_h_mm is not None:
+            for col_name, col_cfg in sizes_cfg.items():
+                if not isinstance(col_cfg, dict):
+                    continue
+                w_max = col_cfg.get("width_mm")
+                h_max = col_cfg.get("max_height_mm")
+                if w_max and canvas_w_mm > float(w_max):
+                    warnings.append(
+                        f"canvas width {canvas_w_mm:.1f}mm > "
+                        f"{col_name}.width_mm={w_max}"
+                    )
+                if h_max and canvas_h_mm > float(h_max):
+                    warnings.append(
+                        f"canvas height {canvas_h_mm:.1f}mm > "
+                        f"{col_name}.max_height_mm={h_max}"
+                    )
 
     return errors, warnings
 

@@ -3,8 +3,8 @@ publisher: Springer Nature
 url: https://www.nature.com/nrd/about/figure-guide
 
 sizes:
-  single_column: { width_mm: 88,  max_height_mm: 240 }
-  double_column: { width_mm: 180, max_height_mm: 240 }
+  single_column: {width_mm: 88,  max_height_mm: 240}
+  double_column: {width_mm: 180, max_height_mm: 240}
 
 fonts:
   preferred: [Arial, Helvetica]

@@ -3,9 +3,9 @@ publisher: AAAS
 url: https://www.science.org/content/page/instructions-preparing-initial-manuscript
 
 sizes:
-  single_column: { width_mm: 55,  max_height_mm: 240 }
-  double_column: { width_mm: 120, max_height_mm: 240 }
-  page_width:    { width_mm: 183, max_height_mm: 240 }
+  single_column: {width_mm: 55,  max_height_mm: 240}
+  double_column: {width_mm: 120, max_height_mm: 240}
+  page_width:    {width_mm: 183, max_height_mm: 240}
 
 fonts:
   preferred: [Helvetica, Arial]

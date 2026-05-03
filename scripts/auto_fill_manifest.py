@@ -104,9 +104,12 @@ def parse_template(template_path: Path) -> tuple[list[Placeholder], list[Label]]
     labels: list[Label] = []
     for tag in ("svg:text", "svg:tspan"):
         for elem in root.xpath(f'.//{tag}[@id]', namespaces=SVG_NS):
-            text = (elem.text or "").strip()
+            # Concatenate the entire text subtree (handles
+            # <text id="x"><tspan>Label</tspan></text> which is the common
+            # shape after Inkscape/Affinity export). `elem.text` alone
+            # would return None and we'd drop the label.
+            text = "".join(elem.itertext()).strip()
             if not text:
-                # skip unlabeled <tspan> wrappers
                 continue
             try:
                 x_raw = elem.get("x"); y_raw = elem.get("y")

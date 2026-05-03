@@ -240,7 +240,14 @@ def main() -> int:
         print(f"Error: SVG not found: {args.svg}", file=sys.stderr)
         return 2
 
-    pairs = collect_text_bboxes(args.svg, use_inkscape=not args.no_inkscape)
+    try:
+        pairs = collect_text_bboxes(args.svg, use_inkscape=not args.no_inkscape)
+    except (etree.XMLSyntaxError, etree.ParseError, OSError) as exc:
+        # Convert lxml exceptions into a stable CLI error code so callers
+        # (CI gates, the assemble_figure post-step) get a predictable
+        # signal instead of a Python traceback.
+        print(f"Error: failed to parse SVG: {exc}", file=sys.stderr)
+        return 2
     overlaps = find_overlaps(pairs, threshold=args.threshold)
 
     if not overlaps:

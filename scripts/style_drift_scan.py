@@ -194,19 +194,24 @@ def _collect_style_ids(library_root: Path) -> list[str]:
         except (json.JSONDecodeError, OSError):
             pass
     # Legacy per-category YAMLs definitely have it.
+    import yaml  # local import: keeps style_drift_scan importable without yaml on the path
     for category in ("cells", "molecules", "organelles", "tissues",
                      "organs", "equipment", "pathways", "arrows"):
         yp = library_root / category / "_index.yaml"
         if not yp.exists():
             continue
         try:
-            import yaml
             data = yaml.safe_load(yp.read_text()) or {}
             for entry in data.get("elements", []):
                 sid = entry.get("style_id")
                 if sid:
                     style_ids.add(sid)
-        except Exception:  # noqa: BLE001
+        except (yaml.YAMLError, OSError, AttributeError, TypeError) as exc:
+            # Narrow set: parse / IO / shape errors. Anything else
+            # (KeyError, MemoryError, …) propagates as a real bug rather
+            # than producing a false-negative "no drift" report.
+            print(f"[warn] style_drift_scan: failed to parse {yp}: {exc}",
+                  file=sys.stderr)
             continue
     return sorted(style_ids)
 

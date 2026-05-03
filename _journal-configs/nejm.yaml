@@ -3,8 +3,8 @@ publisher: Massachusetts Medical Society
 url: https://www.nejm.org/author-center
 
 sizes:
-  single_column: { width_mm: 80,  max_height_mm: 230 }
-  double_column: { width_mm: 165, max_height_mm: 230 }
+  single_column: {width_mm: 80,  max_height_mm: 230}
+  double_column: {width_mm: 165, max_height_mm: 230}
 
 fonts:
   preferred: [Helvetica, Arial]

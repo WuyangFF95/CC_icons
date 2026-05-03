@@ -3,8 +3,8 @@ publisher: Elsevier
 url: https://www.thelancet.com/lancet/information-for-authors
 
 sizes:
-  single_column: { width_mm: 70,  max_height_mm: 230 }
-  double_column: { width_mm: 145, max_height_mm: 230 }
+  single_column: {width_mm: 70,  max_height_mm: 230}
+  double_column: {width_mm: 145, max_height_mm: 230}
 
 fonts:
   preferred: [Arial, Helvetica, Univers]
