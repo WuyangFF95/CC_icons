@@ -827,10 +827,37 @@ def build_parser() -> argparse.ArgumentParser:
                        help='element subject, e.g. "regulatory T cell"')
     p_reg.add_argument("--style", required=True,
                        help='style label, e.g. "flat-blue"')
-    p_reg.add_argument("--provider", required=True,
-                       choices=["recraft-v3", "gemini-imagen-4",
-                                "zhipu-cogview-4", "minimax", "gpt-image",
-                                "hand-drawn"])
+    p_reg.add_argument(
+        "--provider", required=True,
+        choices=[
+            # legacy v0.1.0 alias (kept for backward compat with existing
+            # _index.yaml rows registered before the v0.1.1 tier rename).
+            "recraft-v3",
+            # v0.1.1 explicit Recraft tiers (the SKILL.md mermaid + §1.1
+            # reference these by name; "前者便宜，元件丑陋则用后者").
+            "recraft-4-vector",
+            "recraft-4-vector-pro",
+            # Diffusion / raster providers that go through PNG → SVG.
+            "gemini-imagen-4",
+            "zhipu-cogview-4",
+            "minimax",
+            "gpt-image",
+            # v0.1.1 outline-then-color path (§二 2.x): high-end PNG model
+            # produces line-art only, then Inkscape Trace + manual coloring.
+            # Tracks the source so audit/stats can separate this tier from
+            # full-color diffusion+vectorize rows (very different node counts
+            # and edit-friendliness).
+            "gpt-image2-outline",
+            "gemini-outline",
+            "gpt-image-outline",
+            # Human-authored.
+            "hand-drawn",
+        ],
+        help=("the generator path used to produce this element. "
+              "`*-outline` variants flag the §二 2.x two-stage workflow "
+              "(line-art PNG → vectorize → Inkscape color), so audit/stats "
+              "can report it separately from the standard color-block path."),
+    )
     p_reg.add_argument("--version", default="1", help="version tag (default: 1)")
     p_reg.add_argument("--style-ref", help="style reference filename")
     p_reg.add_argument("--style-id", help="provider-specific style id")

@@ -337,6 +337,7 @@ inkscape figure.svg
 | 中文标签 / 中文场景（PNG 路径）| **智谱 CogView-4** | OpenAI gpt-image | Recraft (中文糊) |
 | 实验装置（仪器、培养皿）| **Recraft V3** | Gemini Imagen 4 | - |
 | 信号通路单点（受体激活等）| **Recraft V3** | - | - |
+| **轮廓 / 结构化元件**（昆虫触角、神经元突起、解剖切面线条、骨架图等） | **GPT Image 2 outline → vectorize → Inkscape 着色** | OpenAI gpt-image (sketch prompt) | Recraft (色块过密、轮廓被切碎) |
 | 流程图节点（圆角矩形等）| **不要用 AI** | 直接用 Inkscape/PPT 画 | 任何 AI |
 | 手绘风/插画风 | OpenAI gpt-image | Gemini | Recraft (太程式化) |
 
@@ -462,6 +463,64 @@ def preprocess_for_vectorization(png_path: Path, output_path: Path) -> None:
 ```
 
 预处理后再送 vectorizer.ai：节点数能减少 60–80%，颜色规范回到可控范围。
+
+### 2.x 轮廓素材的双段处理（结构化元件最划算）
+
+**适用场景**：CC0 库未覆盖、Recraft 又把元件画得"色块太碎太丑"的结构化元件——昆虫触角、神经元突起、解剖切面线条、骨架图、机械装置示意。
+
+**核心原则**：让 AI 只负责**轮廓**，色块由人在 Inkscape 里套项目色板手动填——这两件事各自最快。
+
+**第 1 段：高级 PNG 模型出素描风轮廓**
+
+```text
+prompt 模板：
+Generate a [SUBJECT] in pure outline / line-art style.
+Strict constraints:
+- Only black contour lines on transparent or pure-white background
+- NO interior fill, NO shading, NO color blocks, NO gradients
+- Continuous strokes for body / wings / antennae / segments
+- Anatomically accurate proportions
+- 1024×1024, square crop, subject centered
+```
+
+实测 prompt 收敛要点：
+- "pure outline" "line-art" "no fill" 三个词必须同时给，单给"sketch"会带阴影；
+- 给一两个对照样图作 reference image（Gemini / GPT Image 2 都支持）效果最稳；
+- 明确禁止"color"、"shading"、"watercolor" 关键词，避免半透明渗色。
+
+provider 选型（**仅讨论"出无填色轮廓"这条路径**）：
+
+| Provider | 轮廓服从度 | 解剖准确度 | 成本 | 备注 |
+|---|---|---|---|---|
+| **GPT Image 2** | 强 | 高 | 中 | 首选，prompt 服从最稳 |
+| Gemini Imagen 4 | 中 | 中 | 中 | 提供参考图时更稳 |
+| OpenAI gpt-image | 中 | 中 | 中 | 偶尔渗 watercolor，需明确禁止 |
+| Recraft | ⚠️ | - | 低 | **不要走这条路径**：色块产出器，禁色块时反而画不出形 |
+
+**第 2 段：矢量化 + 着色**
+
+线稿矢量化的天然优势：
+
+| 指标 | 全色块 PNG（直接出色块的图） | 纯轮廓 PNG（本路径） |
+|---|---|---|
+| 矢量化后路径节点数 | 数千（每色块一组） | 数十～数百（描边一组） |
+| 半透明伪色层（沾水） | 严重，需 quantize 预处理 | 几乎没有，直接 trace 即可 |
+| Inkscape 编辑友好度 | 节点过多，难二次加工 | 节点干净，套色板秒填 |
+| 修改单一颜色 | 多组路径联动，容易漏 | 一组 fill，秒切 |
+
+```bash
+# Step 2a: 矢量化（轮廓图直接走 Inkscape Trace 即够，省 vectorizer.ai 钱）
+inkscape input-outline.png \
+  --actions="select-all;trace-bitmap-brightness;export-filename:traced.svg;export-do" \
+  --batch-process
+
+# Step 2b: 在 Inkscape GUI 里着色
+# 1) Edit → Find/Replace → 选所有 path → 设 stroke / fill 用项目色板
+# 2) 或用 swatches 面板一键应用 nature-flat-blue 色板
+# 3) 导出最终 svg；走 library_tools.py register --provider gpt-image2-outline 入库
+```
+
+**入库元数据约定**：register 时 `--provider gpt-image2-outline`（或 `gemini-outline` 等），让 audit / search 能区分这一档元件的来源——它和扩散+矢量化的色块 SVG 在节点密度、可编辑性上有显著差异，下游报告要分开统计。
 
 ---
 
